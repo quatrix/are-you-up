@@ -28,7 +28,7 @@ public struct Config: Codable, Equatable {
             }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(defaults).write(to: url)
+            try encoder.encode(defaults).write(to: url, options: .atomic)
             return defaults
         }
         return try JSONDecoder().decode(Config.self, from: Data(contentsOf: url))

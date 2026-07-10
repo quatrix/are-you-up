@@ -123,8 +123,15 @@ public final class Store {
     /// NULL parameter - `ts TEXT PRIMARY KEY` still permits NULL in sqlite's
     /// rowid tables, and a NULL-ts row would poison every future `rows()`
     /// call (guarded against separately, but better to never write one).
+    ///
+    /// The message includes sqlite3_errstr(rc) alongside lastMessage():
+    /// sqlite3_errmsg can still report stale "not an error" text for some
+    /// bind failure modes, so the raw result code's own string is included
+    /// too rather than relying on errmsg alone.
     private func check(_ rc: Int32) throws {
-        guard rc == SQLITE_OK else { throw StoreError.sqlite(lastMessage()) }
+        guard rc == SQLITE_OK else {
+            throw StoreError.sqlite("\(String(cString: sqlite3_errstr(rc))): \(lastMessage())")
+        }
     }
 
     private func rows(_ stmt: OpaquePointer?) throws -> [Sample] {
