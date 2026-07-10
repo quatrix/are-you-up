@@ -9,5 +9,5 @@ async fn main() {
         .await
         .expect("bind ARE_YOU_UP_ADDR; the address must be free and well-formed");
     println!("listening on {addr}, database at {db_path}");
-    axum::serve(listener, app(conn)).await.expect("server runs until killed");
+    axum::serve(listener, app(conn)).await.expect("serve fails only on unrecoverable accept errors");
 }
