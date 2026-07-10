@@ -15,7 +15,12 @@ final class TimestampsTests: XCTestCase {
     }
 
     func testParsesForeignOffsets() {
-        XCTAssertNotNil(Timestamps.date(from: "2026-07-10T22:00:00+03:00"))
-        XCTAssertNotNil(Timestamps.date(from: "2026-07-10T19:00:00Z"))
+        // Same instant, two representations: 22:00+03:00 is 19:00 UTC.
+        // Equality (not just non-nil) proves the offset is interpreted.
+        let withOffset = Timestamps.date(from: "2026-07-10T22:00:00+03:00")
+        let utc = Timestamps.date(from: "2026-07-10T19:00:00Z")
+        XCTAssertNotNil(withOffset)
+        XCTAssertNotNil(utc)
+        XCTAssertEqual(withOffset, utc)
     }
 }
