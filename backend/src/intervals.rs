@@ -26,13 +26,21 @@ pub struct Interval {
 
 /// Turns time-sorted samples into merged intervals. See module tests for
 /// the exact semantics of the threshold and the gap break.
+///
+/// Precondition: `samples` must be sorted ascending by `t`. Unsorted input
+/// silently produces meaningless intervals - there is no error to return,
+/// just wrong output - so callers must sort before calling this.
 pub fn derive(samples: &[Sample], threshold_s: i64, max_gap_s: i64) -> Vec<Interval> {
     let mut out: Vec<Interval> = Vec::new();
     for sample in samples {
         let state = if sample.idle_s < threshold_s { State::Active } else { State::Idle };
         match out.last_mut() {
             // Extend the current run: same state, and close enough in time.
+            // num_seconds() truncates toward zero, so a sub-second overshoot
+            // past max_gap_s still merges here - deliberate, since 90s is a
+            // loose heuristic already; do not "fix" the rounding either way.
             Some(last) if last.state == state && (sample.t - last.end).num_seconds() <= max_gap_s => {
+                debug_assert!(last.end <= sample.t, "samples must be sorted ascending by t; got {:?} after {:?}", sample.t, last.end);
                 last.end = sample.t;
             }
             // State flip or gap break: start a new interval at this sample.

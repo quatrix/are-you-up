@@ -41,3 +41,58 @@ async fn healthz_returns_ok() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, Value::String("ok".into()));
 }
+
+use serde_json::json;
+
+fn batch() -> Value {
+    json!({
+        "source": "macbook",
+        "samples": [
+            {"ts": "2026-07-10T22:00:00+03:00", "idle_s": 4},
+            {"ts": "2026-07-10T22:00:30+03:00", "idle_s": 34}
+        ]
+    })
+}
+
+#[tokio::test]
+async fn post_samples_accepts_a_batch() {
+    let app = test_app();
+    let (status, body) = send(&app, "POST", "/v1/samples", Some(batch())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["accepted"], 2);
+}
+
+#[tokio::test]
+async fn post_samples_is_idempotent() {
+    let app = test_app();
+    let (first, _) = send(&app, "POST", "/v1/samples", Some(batch())).await;
+    let (second, body) = send(&app, "POST", "/v1/samples", Some(batch())).await;
+    assert_eq!(first, StatusCode::OK);
+    assert_eq!(second, StatusCode::OK);
+    assert_eq!(body["accepted"], 2);
+}
+
+#[tokio::test]
+async fn post_samples_rejects_bad_input_with_400_and_reason() {
+    let app = test_app();
+    let cases: Vec<Value> = vec![
+        json!({"source": "", "samples": [{"ts": "2026-07-10T22:00:00+03:00", "idle_s": 1}]}),
+        json!({"source": "macbook", "samples": [{"ts": "not a timestamp", "idle_s": 1}]}),
+        json!({"source": "macbook", "samples": [{"ts": "2026-07-10T22:00:00+03:00", "idle_s": -1}]}),
+        json!({"source": "macbook"}),
+    ];
+    for case in cases {
+        let (status, body) = send(&app, "POST", "/v1/samples", Some(case.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "case: {case}");
+        assert!(body["error"].is_string(), "case: {case}, body: {body}");
+    }
+    // Invalid JSON entirely.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/samples")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{nope"))
+        .expect("request literals in tests are well-formed");
+    let response = app.clone().oneshot(request).await.expect("router is infallible");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
