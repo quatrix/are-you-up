@@ -1,0 +1,5 @@
+tmp/
+*.db
+.DS_Store
+backend/target/
+mac/.build/
