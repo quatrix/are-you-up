@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -28,9 +29,7 @@ pub fn open_db(path: &str) -> Connection {
     );
     // Lets a concurrent writer (e.g. an ad-hoc `sqlite3` CLI inspecting the live
     // db) block briefly instead of us surfacing its SQLITE_BUSY as a 500.
-    let _busy_timeout_ms: i64 = conn
-        .query_row("PRAGMA busy_timeout=5000", [], |row| row.get(0))
-        .expect("set busy_timeout pragma");
+    conn.busy_timeout(std::time::Duration::from_millis(5000)).expect("set busy_timeout");
     conn.execute(
         "CREATE TABLE IF NOT EXISTS samples (
             source TEXT NOT NULL,
@@ -54,10 +53,15 @@ pub fn app(conn: Connection) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/samples", post(post_samples))
+        .route("/v1/intervals", get(get_intervals))
         .with_state(state)
 }
 
 /// Uniform JSON error body. Client mistakes are always 4xx, never 500.
+///
+/// Two rejections never reach this function and so don't get this shape:
+/// axum's body extractors reject a non-UTF-8 body with a plain-text 400 and
+/// an oversize body with a plain-text 413, before our handlers run.
 fn error_response(status: StatusCode, message: String) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
@@ -94,6 +98,9 @@ async fn post_samples(State(state): State<AppState>, body: String) -> Response {
     }
 
     let mut conn = state.db.lock().expect("db mutex is never poisoned: no handler panics while holding it");
+    // Every early return below drops `tx` without calling commit(); rusqlite's
+    // Transaction defaults to DropBehavior::Rollback, so the whole batch is
+    // rolled back rather than leaving earlier rows half-committed.
     let tx = match conn.transaction() {
         Ok(tx) => tx,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
@@ -112,4 +119,77 @@ async fn post_samples(State(state): State<AppState>, body: String) -> Response {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}"));
     }
     Json(serde_json::json!({ "accepted": req.samples.len() })).into_response()
+}
+
+#[derive(Deserialize)]
+struct IntervalsQuery {
+    from: Option<String>,
+    to: Option<String>,
+    threshold_s: Option<i64>,
+    source: Option<String>,
+}
+
+async fn get_intervals(State(state): State<AppState>, Query(q): Query<IntervalsQuery>) -> Response {
+    let (Some(from_raw), Some(to_raw)) = (&q.from, &q.to) else {
+        return error_response(StatusCode::BAD_REQUEST, "from and to are required (RFC 3339; percent-encode '+')".into());
+    };
+    let Ok(from) = DateTime::parse_from_rfc3339(from_raw) else {
+        return error_response(StatusCode::BAD_REQUEST, format!("from is not RFC 3339: {from_raw:?}"));
+    };
+    let Ok(to) = DateTime::parse_from_rfc3339(to_raw) else {
+        return error_response(StatusCode::BAD_REQUEST, format!("to is not RFC 3339: {to_raw:?}"));
+    };
+    let threshold_s = q.threshold_s.unwrap_or(900);
+    if threshold_s <= 0 {
+        return error_response(StatusCode::BAD_REQUEST, "threshold_s must be positive".into());
+    }
+
+    // ponytail: full scan + parse, ~1M rows/year at one device. Add an epoch
+    // column + index if a profile ever shows this query mattering.
+    let rows: Vec<(String, String, i64)> = {
+        let conn = state.db.lock().expect("db mutex is never poisoned: no handler panics while holding it");
+        let mut stmt = match conn.prepare("SELECT source, ts, idle_s FROM samples") {
+            Ok(stmt) => stmt,
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
+        };
+        let result = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .and_then(|mapped| mapped.collect());
+        match result {
+            Ok(rows) => rows,
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
+        }
+    };
+
+    let mut by_source: BTreeMap<String, Vec<intervals::Sample>> = BTreeMap::new();
+    for (source, ts, idle_s) in rows {
+        if let Some(wanted) = &q.source {
+            if &source != wanted {
+                continue;
+            }
+        }
+        // Rows were validated at insert time; skip rather than 500 if one is somehow bad.
+        let Ok(t) = DateTime::parse_from_rfc3339(&ts) else { continue };
+        if t < from || t >= to {
+            continue;
+        }
+        by_source.entry(source).or_default().push(intervals::Sample { t, idle_s });
+    }
+
+    let mut out = Vec::new();
+    for (source, mut samples) in by_source {
+        samples.sort_by_key(|s| s.t);
+        for iv in intervals::derive(&samples, threshold_s, intervals::MAX_GAP_S) {
+            out.push(serde_json::json!({
+                "source": source,
+                "start": iv.start.to_rfc3339(),
+                "end": iv.end.to_rfc3339(),
+                "state": match iv.state {
+                    intervals::State::Active => "active",
+                    intervals::State::Idle => "idle",
+                },
+            }));
+        }
+    }
+    Json(serde_json::json!({ "intervals": out })).into_response()
 }
