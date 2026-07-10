@@ -70,4 +70,12 @@ final class StoreTests: XCTestCase {
         store = try Store(path: path)
         XCTAssertEqual(try store.unsynced(limit: 10).count, 1)
     }
+
+    func testReinsertingSyncedRowResetsToUnsynced() throws {
+        try store.insert(Sample(ts: "2026-07-10T22:00:00+03:00", idleS: 1))
+        try store.markSynced(["2026-07-10T22:00:00+03:00"])
+        XCTAssertEqual(try store.unsynced(limit: 10), [])
+        try store.insert(Sample(ts: "2026-07-10T22:00:00+03:00", idleS: 9))
+        XCTAssertEqual(try store.unsynced(limit: 10), [Sample(ts: "2026-07-10T22:00:00+03:00", idleS: 9)])
+    }
 }

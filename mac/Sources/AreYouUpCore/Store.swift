@@ -35,7 +35,7 @@ public final class Store {
         try exec("PRAGMA journal_mode=WAL")
         try exec("""
             CREATE TABLE IF NOT EXISTS samples (
-                ts TEXT PRIMARY KEY,
+                ts TEXT PRIMARY KEY NOT NULL,
                 idle_s INTEGER NOT NULL,
                 synced INTEGER NOT NULL DEFAULT 0
             )
@@ -49,16 +49,22 @@ public final class Store {
     public func insert(_ sample: Sample) throws {
         let stmt = try prepare("INSERT OR REPLACE INTO samples (ts, idle_s, synced) VALUES (?, ?, 0)")
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, sample.ts, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_int64(stmt, 2, Int64(sample.idleS))
+        try check(sqlite3_bind_text(stmt, 1, sample.ts, -1, SQLITE_TRANSIENT))
+        try check(sqlite3_bind_int64(stmt, 2, Int64(sample.idleS)))
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.sqlite(lastMessage()) }
     }
 
-    /// Oldest-first so the server receives samples in time order.
+    // ponytail: TEXT-ordering comparisons across unsynced(), pruneSynced(),
+    // and samples(since:) assume a stable UTC offset per device. All three
+    // uses are housekeeping/display, not data correctness, so a DST-window
+    // inaccuracy is harmless; parse-and-compare if that ever changes.
+
+    /// Lexical (approximately time) order; the server orders by parsed
+    /// timestamps anyway.
     public func unsynced(limit: Int) throws -> [Sample] {
         let stmt = try prepare("SELECT ts, idle_s FROM samples WHERE synced = 0 ORDER BY ts LIMIT ?")
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, Int64(limit))
+        try check(sqlite3_bind_int64(stmt, 1, Int64(limit)))
         return try rows(stmt)
     }
 
@@ -70,7 +76,7 @@ public final class Store {
             for ts in timestamps {
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
-                sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT)
+                try check(sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT))
                 guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.sqlite(lastMessage()) }
             }
             try exec("COMMIT")
@@ -80,16 +86,12 @@ public final class Store {
         }
     }
 
-    // ponytail: TEXT-ordering comparisons below assume a stable UTC offset
-    // per device. Pruning and the 6h strip are housekeeping/display, so a
-    // DST-window inaccuracy is harmless. Parse-and-compare if it ever isn't.
-
     /// Deletes synced rows with ts before the cutoff. Unsynced rows are
     /// never pruned: they are data the server has not seen yet.
     public func pruneSynced(before ts: String) throws {
         let stmt = try prepare("DELETE FROM samples WHERE synced = 1 AND ts < ?")
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT)
+        try check(sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT))
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw StoreError.sqlite(lastMessage()) }
     }
 
@@ -97,7 +99,7 @@ public final class Store {
     public func samples(since ts: String) throws -> [Sample] {
         let stmt = try prepare("SELECT ts, idle_s FROM samples WHERE ts >= ? ORDER BY ts")
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT)
+        try check(sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT))
         return try rows(stmt)
     }
 
@@ -117,12 +119,23 @@ public final class Store {
         }
     }
 
+    /// A failed bind (e.g. OOM) must not be allowed to silently step with a
+    /// NULL parameter - `ts TEXT PRIMARY KEY` still permits NULL in sqlite's
+    /// rowid tables, and a NULL-ts row would poison every future `rows()`
+    /// call (guarded against separately, but better to never write one).
+    private func check(_ rc: Int32) throws {
+        guard rc == SQLITE_OK else { throw StoreError.sqlite(lastMessage()) }
+    }
+
     private func rows(_ stmt: OpaquePointer?) throws -> [Sample] {
         var result: [Sample] = []
         while true {
             switch sqlite3_step(stmt) {
             case SQLITE_ROW:
-                let ts = String(cString: sqlite3_column_text(stmt, 0))
+                guard let tsColumn = sqlite3_column_text(stmt, 0) else {
+                    throw StoreError.sqlite("samples.ts column was NULL")
+                }
+                let ts = String(cString: tsColumn)
                 result.append(Sample(ts: ts, idleS: Int(sqlite3_column_int64(stmt, 1))))
             case SQLITE_DONE:
                 return result
