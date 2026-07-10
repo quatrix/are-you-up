@@ -23,6 +23,8 @@ final class LogTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         XCTAssertTrue(lines[0].contains("[INFO] first"), "got: \(lines[0])")
         XCTAssertTrue(lines[1].contains("[ERROR] second"), "got: \(lines[1])")
+        XCTAssertNotNil(lines[0].range(of: #"^\d{4}-\d{2}-\d{2}T"#, options: .regularExpression),
+                        "missing timestamp prefix, got: \(lines[0])")
     }
 
     func testDebugLinesAppearWhenEnabled() throws {
@@ -30,5 +32,15 @@ final class LogTests: XCTestCase {
         log.debug("visible")
         let content = try String(contentsOfFile: path, encoding: .utf8)
         XCTAssertTrue(content.contains("[DEBUG] visible"))
+    }
+
+    func testAppendsAcrossRelaunch() throws {
+        Log(path: path).info("before relaunch")
+        Log(path: path).info("after relaunch")
+        let lines = try String(contentsOfFile: path, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].contains("before relaunch"), "got: \(lines[0])")
+        XCTAssertTrue(lines[1].contains("after relaunch"), "got: \(lines[1])")
     }
 }
