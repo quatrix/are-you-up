@@ -22,3 +22,25 @@ Verified on this macbook (macOS 16.0, Swift 6.1.2):
   via IOPM assertions. Caveat found: running `caffeinate` holds the same
   assertion type, so a naive check misreads caffeinate as media. Rejected
   for MVP anyway (user chose input-only detection).
+
+## 2026-07-10 - `rusqlite --features bundled` fails to build on the default toolchain
+
+`cargo test` in `backend/` failed before any of our code ran:
+
+```
+error[E0658]: use of unstable library feature `cfg_select`
+  --> libsqlite3-sys-0.38.1/build.rs:110:9
+```
+
+`rustc --version` showed the machine's default `nightly` toolchain resolves
+to `1.94.0-nightly (2025-12-15)`. `libsqlite3-sys 0.38.1`'s bundled-build
+script calls the `cfg_select!` macro unconditionally (no `#[cfg(...)]` or
+`#![feature(cfg_select)]` guard), assuming it is stabilized; it is not
+stable as of that nightly.
+
+Checked `rustup toolchain list`: besides the default `nightly` (1.94) and
+`stable` (1.92.0, also predates the fix), a `1.96.1` toolchain
+(2026-06-26) was already installed locally. `rustup run 1.96.1 cargo build`
+succeeded, confirming `cfg_select!` is stable by 1.96.1 and the failure is
+purely a stale-default-toolchain problem, not a bad dependency pin.
+Decision recorded in DECISIONS.md 0005.
