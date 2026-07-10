@@ -4,3 +4,5 @@ tmp/
 backend/target/
 mac/.build/
 .worktrees/
+.lavish/
+.claude/settings.local.json

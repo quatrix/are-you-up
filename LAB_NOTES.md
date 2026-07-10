@@ -22,3 +22,26 @@ Verified on this macbook (macOS 16.0, Swift 6.1.2):
   via IOPM assertions. Caveat found: running `caffeinate` holds the same
   assertion type, so a naive check misreads caffeinate as media. Rejected
   for MVP anyway (user chose input-only detection).
+
+## 2026-07-10 - Probed Timestamps formatter edge cases during mac Task 1 review
+
+Ran a standalone probe (`scratchpad/ts_probe.swift`, mirror of
+`Timestamps`) plus a clean `swift build -Xswiftc
+-strict-concurrency=complete` in the mac-client worktree:
+
+- The `DateFormatter` with `"yyyy-MM-dd'T'HH:mm:ssXXXXX"` + `en_US_POSIX`
+  is DST-aware: a winter instant formats as `+02:00` and a summer instant
+  as `+03:00` under Asia/Jerusalem, so offsets are computed per-date, not
+  snapshotted.
+- Ruled out the "cached formatter snapshots the timezone" hypothesis: after
+  `NSTimeZone.default = Asia/Tokyo`, the same static formatter instance
+  emitted `+09:00`. The formatter consults the default zone dynamically.
+  (A *system* timezone change while the agent runs still depends on
+  Foundation resetting its systemTimeZone cache; unverified in-process.)
+- Parse strictness: `date(from:)` returns nil for legal RFC 3339 variants
+  we never emit - fractional seconds (`...T22:00:00.123+03:00`) and
+  lowercase `t`/`z`. Fine while it only parses its own output; a doc
+  comment should state the accepted subset.
+- Clean build with `-strict-concurrency=complete`: zero warnings. Recent
+  SDKs mark `DateFormatter` Sendable (thread-safe since macOS 10.9), so the
+  shared `static let formatter` is safe even off-main.
