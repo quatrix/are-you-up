@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -29,7 +30,8 @@ pub fn open_db(path: &str) -> Connection {
     );
     // Lets a concurrent writer (e.g. an ad-hoc `sqlite3` CLI inspecting the live
     // db) block briefly instead of us surfacing its SQLITE_BUSY as a 500.
-    conn.busy_timeout(std::time::Duration::from_millis(5000)).expect("set busy_timeout");
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .expect("set busy_timeout");
     conn.execute(
         "CREATE TABLE IF NOT EXISTS samples (
             source TEXT NOT NULL,
@@ -49,7 +51,9 @@ struct AppState {
 }
 
 pub fn app(conn: Connection) -> Router {
-    let state = AppState { db: Arc::new(Mutex::new(conn)) };
+    let state = AppState {
+        db: Arc::new(Mutex::new(conn)),
+    };
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/samples", post(post_samples))
@@ -90,14 +94,23 @@ async fn post_samples(State(state): State<AppState>, body: String) -> Response {
     }
     for (i, sample) in req.samples.iter().enumerate() {
         if DateTime::parse_from_rfc3339(&sample.ts).is_err() {
-            return error_response(StatusCode::BAD_REQUEST, format!("samples[{i}].ts is not RFC 3339: {:?}", sample.ts));
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("samples[{i}].ts is not RFC 3339: {:?}", sample.ts),
+            );
         }
         if sample.idle_s < 0 {
-            return error_response(StatusCode::BAD_REQUEST, format!("samples[{i}].idle_s is negative"));
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("samples[{i}].idle_s is negative"),
+            );
         }
     }
 
-    let mut conn = state.db.lock().expect("db mutex is never poisoned: no handler panics while holding it");
+    let mut conn = state
+        .db
+        .lock()
+        .expect("db mutex is never poisoned: no handler panics while holding it");
     // Every early return below drops `tx` without calling commit(); rusqlite's
     // Transaction defaults to DropBehavior::Rollback, so the whole batch is
     // rolled back rather than leaving earlier rows half-committed.
@@ -129,25 +142,52 @@ struct IntervalsQuery {
     source: Option<String>,
 }
 
-async fn get_intervals(State(state): State<AppState>, Query(q): Query<IntervalsQuery>) -> Response {
+async fn get_intervals(
+    State(state): State<AppState>,
+    query: Result<Query<IntervalsQuery>, QueryRejection>,
+) -> Response {
+    // Parsed as a Result (not a bare Query<_> extractor arg) so a malformed
+    // threshold_s gets our uniform JSON 400 instead of axum's plain-text one,
+    // matching post_samples' hand-parse rationale.
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid query: {e}")),
+    };
     let (Some(from_raw), Some(to_raw)) = (&q.from, &q.to) else {
-        return error_response(StatusCode::BAD_REQUEST, "from and to are required (RFC 3339; percent-encode '+')".into());
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "from and to are required (RFC 3339; percent-encode '+' as %2B)".into(),
+        );
     };
     let Ok(from) = DateTime::parse_from_rfc3339(from_raw) else {
-        return error_response(StatusCode::BAD_REQUEST, format!("from is not RFC 3339: {from_raw:?}"));
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!("from is not RFC 3339 (percent-encode '+' as %2B): {from_raw:?}"),
+        );
     };
     let Ok(to) = DateTime::parse_from_rfc3339(to_raw) else {
-        return error_response(StatusCode::BAD_REQUEST, format!("to is not RFC 3339: {to_raw:?}"));
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!("to is not RFC 3339 (percent-encode '+' as %2B): {to_raw:?}"),
+        );
     };
     let threshold_s = q.threshold_s.unwrap_or(900);
     if threshold_s <= 0 {
-        return error_response(StatusCode::BAD_REQUEST, "threshold_s must be positive".into());
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "threshold_s must be positive".into(),
+        );
     }
 
-    // ponytail: full scan + parse, ~1M rows/year at one device. Add an epoch
-    // column + index if a profile ever shows this query mattering.
+    // ponytail: full scan + parse. Measured (Task 4 quality review, see
+    // LAB_NOTES.md 2026-07-10) at 1M rows (one device-year): ~0.8s/request
+    // warm, ~100-150MB transient RSS - memory on a small host bites before
+    // latency would. Revisit with an epoch column + index if that changes.
     let rows: Vec<(String, String, i64)> = {
-        let conn = state.db.lock().expect("db mutex is never poisoned: no handler panics while holding it");
+        let conn = state
+            .db
+            .lock()
+            .expect("db mutex is never poisoned: no handler panics while holding it");
         let mut stmt = match conn.prepare("SELECT source, ts, idle_s FROM samples") {
             Ok(stmt) => stmt,
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
@@ -162,18 +202,32 @@ async fn get_intervals(State(state): State<AppState>, Query(q): Query<IntervalsQ
     };
 
     let mut by_source: BTreeMap<String, Vec<intervals::Sample>> = BTreeMap::new();
+    let mut skipped_unparseable_ts = 0u32;
     for (source, ts, idle_s) in rows {
-        if let Some(wanted) = &q.source {
-            if &source != wanted {
-                continue;
-            }
+        if q.source.as_deref().is_some_and(|wanted| wanted != source) {
+            continue;
         }
-        // Rows were validated at insert time; skip rather than 500 if one is somehow bad.
-        let Ok(t) = DateTime::parse_from_rfc3339(&ts) else { continue };
+        // Rows were validated at insert time; a bad one here means out-of-band
+        // edits or schema drift, not a client mistake - skip it rather than
+        // 500 the whole request, but this must never happen silently: a
+        // dropped row is a dropped interval in the whoop-correction data the
+        // user acts on.
+        let Ok(t) = DateTime::parse_from_rfc3339(&ts) else {
+            skipped_unparseable_ts += 1;
+            continue;
+        };
         if t < from || t >= to {
             continue;
         }
-        by_source.entry(source).or_default().push(intervals::Sample { t, idle_s });
+        by_source
+            .entry(source)
+            .or_default()
+            .push(intervals::Sample { t, idle_s });
+    }
+    if skipped_unparseable_ts > 0 {
+        eprintln!(
+            "warning: skipped {skipped_unparseable_ts} rows with unparseable ts in /v1/intervals"
+        );
     }
 
     let mut out = Vec::new();

@@ -33,18 +33,33 @@ pub struct Interval {
 pub fn derive(samples: &[Sample], threshold_s: i64, max_gap_s: i64) -> Vec<Interval> {
     let mut out: Vec<Interval> = Vec::new();
     for sample in samples {
-        let state = if sample.idle_s < threshold_s { State::Active } else { State::Idle };
+        let state = if sample.idle_s < threshold_s {
+            State::Active
+        } else {
+            State::Idle
+        };
         match out.last_mut() {
             // Extend the current run: same state, and close enough in time.
             // num_seconds() truncates toward zero, so a sub-second overshoot
             // past max_gap_s still merges here - deliberate, since 90s is a
             // loose heuristic already; do not "fix" the rounding either way.
-            Some(last) if last.state == state && (sample.t - last.end).num_seconds() <= max_gap_s => {
-                debug_assert!(last.end <= sample.t, "samples must be sorted ascending by t; got {:?} after {:?}", sample.t, last.end);
+            Some(last)
+                if last.state == state && (sample.t - last.end).num_seconds() <= max_gap_s =>
+            {
+                debug_assert!(
+                    last.end <= sample.t,
+                    "samples must be sorted ascending by t; got {:?} after {:?}",
+                    sample.t,
+                    last.end
+                );
                 last.end = sample.t;
             }
             // State flip or gap break: start a new interval at this sample.
-            _ => out.push(Interval { start: sample.t, end: sample.t, state }),
+            _ => out.push(Interval {
+                start: sample.t,
+                end: sample.t,
+                state,
+            }),
         }
     }
     out
@@ -72,7 +87,11 @@ mod tests {
         let got = derive(&[s("2026-07-10T22:00:00+03:00", 5)], 900, MAX_GAP_S);
         assert_eq!(
             got,
-            vec![Interval { start: t("2026-07-10T22:00:00+03:00"), end: t("2026-07-10T22:00:00+03:00"), state: State::Active }]
+            vec![Interval {
+                start: t("2026-07-10T22:00:00+03:00"),
+                end: t("2026-07-10T22:00:00+03:00"),
+                state: State::Active
+            }]
         );
     }
 
@@ -99,7 +118,11 @@ mod tests {
         );
         assert_eq!(
             got,
-            vec![Interval { start: t("2026-07-10T22:00:00+03:00"), end: t("2026-07-10T22:01:00+03:00"), state: State::Active }]
+            vec![Interval {
+                start: t("2026-07-10T22:00:00+03:00"),
+                end: t("2026-07-10T22:01:00+03:00"),
+                state: State::Active
+            }]
         );
     }
 
@@ -142,7 +165,10 @@ mod tests {
     #[test]
     fn gap_of_exactly_max_still_merges() {
         let got = derive(
-            &[s("2026-07-10T22:00:00+03:00", 1), s("2026-07-10T22:01:30+03:00", 2)],
+            &[
+                s("2026-07-10T22:00:00+03:00", 1),
+                s("2026-07-10T22:01:30+03:00", 2),
+            ],
             900,
             MAX_GAP_S,
         );
@@ -153,7 +179,10 @@ mod tests {
     fn mixed_offsets_compare_as_instants() {
         // 20:00:00Z and 23:00:30+03:00 are 30 seconds apart in real time.
         let got = derive(
-            &[s("2026-07-10T20:00:00Z", 1), s("2026-07-10T23:00:30+03:00", 2)],
+            &[
+                s("2026-07-10T20:00:00Z", 1),
+                s("2026-07-10T23:00:30+03:00", 2),
+            ],
             900,
             MAX_GAP_S,
         );

@@ -1,7 +1,7 @@
 use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use are_you_up_backend::{app, open_db};
@@ -12,7 +12,12 @@ fn test_app() -> axum::Router {
 
 /// Sends one request through the router and returns (status, parsed body).
 /// Non-JSON bodies come back as a JSON string value.
-async fn send(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn send(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let request = match body {
         Some(v) => Request::builder()
             .method(method)
@@ -26,9 +31,18 @@ async fn send(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) 
             .body(Body::empty())
             .expect("request literals in tests are well-formed"),
     };
-    let response = app.clone().oneshot(request).await.expect("router is infallible");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router is infallible");
     let status = response.status();
-    let bytes = response.into_body().collect().await.expect("body reads to end").to_bytes();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body reads to end")
+        .to_bytes();
     let value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     (status, value)
@@ -91,7 +105,11 @@ async fn post_samples_rejects_bad_input_with_400_and_reason() {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from("{nope"))
         .expect("request literals in tests are well-formed");
-    let response = app.clone().oneshot(request).await.expect("router is infallible");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router is infallible");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -125,25 +143,37 @@ async fn post_samples_rolls_back_whole_batch_on_db_error() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
     // Row 1 alone would satisfy every constraint; prove it did not persist.
-    let (_, body) = send(&app, "GET", "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T22:01:00%2B03:00", None).await;
+    let (_, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T22:01:00%2B03:00",
+        None,
+    )
+    .await;
     assert_eq!(body["intervals"], json!([]));
 }
 
 /// A synthetic evening for one source: active run, idle run, then a
 /// >90s gap, then another active run.
 async fn seed_evening(app: &axum::Router, source: &str) {
-    let (status, _) = send(app, "POST", "/v1/samples", Some(json!({
-        "source": source,
-        "samples": [
-            {"ts": "2026-07-10T22:00:00+03:00", "idle_s": 5},
-            {"ts": "2026-07-10T22:00:30+03:00", "idle_s": 2},
-            {"ts": "2026-07-10T22:01:00+03:00", "idle_s": 9},
-            {"ts": "2026-07-10T22:01:30+03:00", "idle_s": 1000},
-            {"ts": "2026-07-10T22:02:00+03:00", "idle_s": 1030},
-            {"ts": "2026-07-10T22:10:00+03:00", "idle_s": 3},
-            {"ts": "2026-07-10T22:10:30+03:00", "idle_s": 4}
-        ]
-    }))).await;
+    let (status, _) = send(
+        app,
+        "POST",
+        "/v1/samples",
+        Some(json!({
+            "source": source,
+            "samples": [
+                {"ts": "2026-07-10T22:00:00+03:00", "idle_s": 5},
+                {"ts": "2026-07-10T22:00:30+03:00", "idle_s": 2},
+                {"ts": "2026-07-10T22:01:00+03:00", "idle_s": 9},
+                {"ts": "2026-07-10T22:01:30+03:00", "idle_s": 1000},
+                {"ts": "2026-07-10T22:02:00+03:00", "idle_s": 1030},
+                {"ts": "2026-07-10T22:10:00+03:00", "idle_s": 3},
+                {"ts": "2026-07-10T22:10:30+03:00", "idle_s": 4}
+            ]
+        })),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -155,11 +185,14 @@ async fn intervals_derives_active_idle_and_gap_break() {
     seed_evening(&app, "macbook").await;
     let (status, body) = send(&app, "GET", &format!("/v1/intervals?{RANGE}"), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["intervals"], json!([
-        {"source": "macbook", "start": "2026-07-10T22:00:00+03:00", "end": "2026-07-10T22:01:00+03:00", "state": "active"},
-        {"source": "macbook", "start": "2026-07-10T22:01:30+03:00", "end": "2026-07-10T22:02:00+03:00", "state": "idle"},
-        {"source": "macbook", "start": "2026-07-10T22:10:00+03:00", "end": "2026-07-10T22:10:30+03:00", "state": "active"}
-    ]));
+    assert_eq!(
+        body["intervals"],
+        json!([
+            {"source": "macbook", "start": "2026-07-10T22:00:00+03:00", "end": "2026-07-10T22:01:00+03:00", "state": "active"},
+            {"source": "macbook", "start": "2026-07-10T22:01:30+03:00", "end": "2026-07-10T22:02:00+03:00", "state": "idle"},
+            {"source": "macbook", "start": "2026-07-10T22:10:00+03:00", "end": "2026-07-10T22:10:30+03:00", "state": "active"}
+        ])
+    );
 }
 
 #[tokio::test]
@@ -168,12 +201,21 @@ async fn intervals_threshold_is_a_query_param() {
     seed_evening(&app, "macbook").await;
     // Threshold above every idle_s in the fixture: everything is active,
     // but the >90s gap still splits.
-    let (status, body) = send(&app, "GET", &format!("/v1/intervals?{RANGE}&threshold_s=1031"), None).await;
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/v1/intervals?{RANGE}&threshold_s=1031"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["intervals"], json!([
-        {"source": "macbook", "start": "2026-07-10T22:00:00+03:00", "end": "2026-07-10T22:02:00+03:00", "state": "active"},
-        {"source": "macbook", "start": "2026-07-10T22:10:00+03:00", "end": "2026-07-10T22:10:30+03:00", "state": "active"}
-    ]));
+    assert_eq!(
+        body["intervals"],
+        json!([
+            {"source": "macbook", "start": "2026-07-10T22:00:00+03:00", "end": "2026-07-10T22:02:00+03:00", "state": "active"},
+            {"source": "macbook", "start": "2026-07-10T22:10:00+03:00", "end": "2026-07-10T22:10:30+03:00", "state": "active"}
+        ])
+    );
 }
 
 #[tokio::test]
@@ -187,7 +229,13 @@ async fn intervals_separates_and_filters_sources() {
     assert!(intervals[..3].iter().all(|i| i["source"] == "macbook"));
     assert!(intervals[3..].iter().all(|i| i["source"] == "pixel"));
 
-    let (_, only) = send(&app, "GET", &format!("/v1/intervals?{RANGE}&source=pixel"), None).await;
+    let (_, only) = send(
+        &app,
+        "GET",
+        &format!("/v1/intervals?{RANGE}&source=pixel"),
+        None,
+    )
+    .await;
     let intervals = only["intervals"].as_array().expect("intervals is an array");
     assert_eq!(intervals.len(), 3);
     assert!(intervals.iter().all(|i| i["source"] == "pixel"));
@@ -198,7 +246,13 @@ async fn intervals_range_is_half_open_and_empty_ranges_are_empty() {
     let app = test_app();
     seed_evening(&app, "macbook").await;
     // to == first sample ts: from <= ts < to excludes everything at 22:00:00.
-    let (status, body) = send(&app, "GET", "/v1/intervals?from=2026-07-10T21:00:00%2B03:00&to=2026-07-10T22:00:00%2B03:00", None).await;
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T21:00:00%2B03:00&to=2026-07-10T22:00:00%2B03:00",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["intervals"], json!([]));
 }
@@ -217,4 +271,29 @@ async fn intervals_validates_params() {
         let (status, _) = send(&app, "GET", uri, None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "uri: {uri}");
     }
+
+    // A non-numeric threshold_s is rejected by axum's Query extractor itself;
+    // it must still come back as our uniform JSON error shape, not axum's
+    // own plain-text rejection body.
+    let with_bad_threshold = format!("/v1/intervals?{RANGE}&threshold_s=abc");
+    let (status, body) = send(&app, "GET", &with_bad_threshold, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].is_string(), "body: {body}");
+}
+
+#[tokio::test]
+async fn intervals_from_after_to_is_vacuously_empty() {
+    let app = test_app();
+    seed_evening(&app, "macbook").await;
+    // from > to: the half-open range [from, to) contains nothing by
+    // definition - deliberate, not an error worth special-casing.
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T23:00:00%2B03:00&to=2026-07-10T22:00:00%2B03:00",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["intervals"], json!([]));
 }
