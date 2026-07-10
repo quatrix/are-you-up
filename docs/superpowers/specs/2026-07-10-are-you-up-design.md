@@ -67,7 +67,8 @@ AppKit accessory app (no dock icon), components:
   up to 1000, marks them synced on 200, records last-success time. Failure:
   log, retry next tick (no backoff; the scale does not need it).
 - **Menu bar** - `NSStatusItem`. Icon: filled circle = active, dimmed =
-  idle (display-only threshold 120s), pause glyph = paused. Menu: current
+  idle (display-only threshold 900s, matching the server default), pause
+  glyph = paused. Menu: current
   status, "Last sync: Nm ago", a 6-hour history strip (custom view drawing
   colored segments from the local db), Pause/Resume, Quit.
 - **Logger** - plain text to `~/Library/Logs/are-you-up.log`,
@@ -91,7 +92,7 @@ POST /v1/samples
 empty source). Upsert on `(source, ts)`.
 
 ```
-GET /v1/intervals?from=...&to=...&threshold_s=120&source=macbook
+GET /v1/intervals?from=...&to=...&threshold_s=900&source=macbook
 -> 200 {"intervals": [
      {"source": "macbook",
       "start": "2026-07-10T22:00:12+03:00",
@@ -100,8 +101,10 @@ GET /v1/intervals?from=...&to=...&threshold_s=120&source=macbook
 ```
 
 `from`/`to` required (RFC 3339); a sample is in range when
-`from <= ts < to`. `threshold_s` optional, default 120. `source` optional;
-default is all sources, intervals computed per source.
+`from <= ts < to`. `threshold_s` optional, default 900: any input keeps
+the state active until 15 minutes pass with none (user choice, to keep
+detection un-noisy). `source` optional; default is all sources, intervals
+computed per source.
 
 Derivation: a sample is *active* if `idle_s < threshold_s`, else *idle*.
 Consecutive same-state samples from the same source merge while the gap
