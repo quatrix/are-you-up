@@ -23,6 +23,17 @@ class StoreTest {
     }
 
     @Test
+    fun reinsertingSyncedRowKeepsItSynced() {
+        // Cursor-overlap replay re-inserts already-uploaded instants; OR
+        // IGNORE must not reset synced=1 (OR REPLACE would re-upload them).
+        val s = store()
+        s.insert("2026-07-11T10:00:00+03:00", 0)
+        s.markSynced(listOf("2026-07-11T10:00:00+03:00"))
+        s.insert("2026-07-11T10:00:00+03:00", 0)
+        assertEquals(0, s.unsyncedCount())
+    }
+
+    @Test
     fun nextBatchRespectsLimitAndTsOrder() {
         val s = store()
         s.insert("2026-07-11T10:00:30+03:00", 0)

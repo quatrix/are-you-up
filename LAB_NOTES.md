@@ -234,3 +234,30 @@ verified every cross-reference its comments make. Findings:
   treated as "no window"; one closing it would grid from -1), but is
   unreachable: the cursor starts at install-time `now` and events <=
   cursor are skipped, so no non-modern timestamp ever passes the filter.
+
+## 2026-07-11 - Store WAL-in-init probe under Robolectric (android Task 5 quality review)
+
+Verified the two claims in `Store.kt`'s init comment ("No effect on
+in-memory databases (tests); WAL on the device") with a temporary
+Robolectric test (`WalProbeTest.kt`, deleted after the run) that opened
+a file-backed and an in-memory `Store` and queried `PRAGMA
+journal_mode` plus `isWriteAheadLoggingEnabled`:
+
+- File-backed (`name = "probe.db"`): `journal_mode=wal`,
+  `isWriteAheadLoggingEnabled=true`. So calling
+  `setWriteAheadLoggingEnabled(true)` in `init` - i.e. before the first
+  `writableDatabase` access - does stick: the helper records the flag
+  and applies it as an open flag in `getDatabaseLocked`. Robolectric
+  shadows only the native layer and runs the real AOSP
+  `SQLiteOpenHelper` code over real sqlite, so this exercises the same
+  framework path the device uses.
+- In-memory (`name = null`): `journal_mode=memory`, flag reported
+  false, inserts work, no crash - the WAL request is silently ignored,
+  as the comment claims.
+
+Also noted while reading: `SQLiteDatabase` keeps a per-connection LRU
+cache of compiled statements keyed by SQL text (default 25), so
+`markSynced`'s per-row `execSQL` inside one transaction reuses the
+compiled UPDATE rather than re-parsing 1000 times - the mac twin's
+explicit prepared-statement reuse happens implicitly here. At ~3
+batches/day this was never a hot path anyway.

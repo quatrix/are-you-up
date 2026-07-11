@@ -7,7 +7,9 @@ import android.database.sqlite.SQLiteOpenHelper
 // Local buffer between synthesis and sync - the same schema and rules as
 // the mac client's store. Rows live here until the server acks them;
 // pruning only ever touches synced rows, so an unreachable server never
-// costs data.
+// costs data. One deliberate divergence from the mac twin: insert uses
+// INSERT OR IGNORE (mac uses OR REPLACE), so cursor-overlap replay never
+// resets an already-synced row back to unsynced.
 class Store(context: Context, name: String? = "client.db") :
     SQLiteOpenHelper(context, name, null, 1), SampleQueue {
 
