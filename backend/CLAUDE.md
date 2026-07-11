@@ -15,8 +15,9 @@ timestamps, 0005 toolchain pin).
 
 ## Architecture (three files, keep it that way)
 
-- `src/main.rs` - thin binary: env config (`ARE_YOU_UP_ADDR`,
-  `ARE_YOU_UP_DB`), bind, serve.
+- `src/main.rs` - thin binary: clap CLI (`--addr`, `--db`; each falls
+  back to `ARE_YOU_UP_ADDR`/`ARE_YOU_UP_DB` then a default - keep that
+  precedence, scripts rely on the env vars), bind, serve.
 - `src/lib.rs` - open_db, router, handlers, validation. Handlers
   hand-parse bodies/queries so every client mistake returns a uniform
   JSON 400 (axum's extractors would 422/plain-text some of them).

@@ -31,7 +31,7 @@ mac menu-bar app                 rust server                 whoop tooling
 
 Server (any box on the tailnet):
 
-    cd backend && make run          # ARE_YOU_UP_ADDR / ARE_YOU_UP_DB to override defaults
+    cd backend && make run          # cargo run -- --help for options (--addr, --db)
 
 Client (this mac):
 

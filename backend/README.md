@@ -5,11 +5,14 @@ active/idle intervals. See `../docs/superpowers/specs/` for the design.
 
 ## Run
 
-    make run                  # or: cargo run
-    ARE_YOU_UP_ADDR=127.0.0.1:8080 ARE_YOU_UP_DB=./are-you-up.db make run
+    make run                                          # defaults: 127.0.0.1:8080, ./are-you-up.db
+    cargo run -- --addr 0.0.0.0:8080 --db /var/lib/are-you-up.db
+    cargo run -- --help                               # full options
 
-Both env vars are optional; the values above are the defaults. Deploy by
-binding the tailnet address. `make build` produces a release binary.
+Every option resolves as: flag, then env var (`ARE_YOU_UP_ADDR`,
+`ARE_YOU_UP_DB`), then default - existing env-based setups keep working.
+Deploy by binding the tailnet address. `make build` produces a release
+binary.
 
 ## API
 
