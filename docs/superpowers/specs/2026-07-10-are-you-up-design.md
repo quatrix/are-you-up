@@ -114,6 +114,35 @@ last sample in the merged run (no extrapolation past observed samples).
 Time not covered by samples is absent from the response; the consumer
 treats it as no-signal.
 
+`consolidate` optional, default `false`; must be exactly `true` or
+`false` (else 400, uniform JSON error). With `consolidate=true` the
+response is the cross-source awake-evidence view (added 2026-07-11):
+
+```
+GET /v1/intervals?from=...&to=...&consolidate=true
+-> 200 {"intervals": [
+     {"start": "2026-07-10T22:00:12+03:00",
+      "end":   "2026-07-10T22:31:42+03:00",
+      "sources": ["macbook"]},
+     {"start": "2026-07-10T22:31:42+03:00",
+      "end":   "2026-07-10T23:15:42+03:00",
+      "sources": ["macbook", "pixel"]}, ...]}
+```
+
+Only *active* time is returned - being active on any device proves the
+owner is awake, which is the signal whoop correction needs; per-source
+idle is not evidence of anything and is simply not emitted (there is no
+`state` field: every consolidated interval is active by definition).
+Consolidation runs after per-source derivation: the per-source active
+intervals are unioned on the timeline and split wherever the set of
+active sources changes, so `sources` (sorted) is exact for every
+interval. Interval boundary timestamps are reused verbatim from the
+underlying per-source intervals (ADR-0004: never re-formatted). Time
+covered by no active interval is absent, as always. `threshold_s` and
+`source` compose with `consolidate` unchanged: the threshold decides
+per-source activeness before merging, and `source` narrows the input
+set.
+
 ```
 GET /healthz -> 200 "ok"
 ```
