@@ -522,3 +522,12 @@ page) appears to have wiped the server db, so the deployment method
 likely doesn't use the systemd StateDirectory path. Clients prune
 synced rows only after 7 days, so the lost days still exist in the two
 client dbs (marked synced, so they will not re-send on their own).
+
+Addendum (same day, after deploying the fix): corrected the server-side
+history via the upsert - re-POSTed the 7 frozen-stopwatch samples
+(16:17:28 through 19:35:13, values 35-215) with wall-clock idle
+computed from the 16:00:00 anchor (1048-12913s); `{"accepted": 7}`,
+and the raw view now shows them as idle. The 19:56/20:03 idle_s=0
+resets were left untouched (real return home). So pre-fix samples in
+the db can carry post-fix wall-clock values; the client dbs still hold
+the original frozen readings.
