@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -14,6 +16,26 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, error, warn};
 
 pub mod intervals;
+
+fn peer_ip(peer: Option<SocketAddr>) -> String {
+    peer
+        .map(|address| address.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod peer_logging_tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use super::peer_ip;
+
+    #[test]
+    fn peer_ip_formats_the_remote_host_without_its_port() {
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(100, 107, 46, 54)), 41302);
+        assert_eq!(peer_ip(Some(peer)), "100.107.46.54");
+        assert_eq!(peer_ip(None), "unknown");
+    }
+}
 
 /// Opens (creating if needed) the sqlite database and ensures the schema.
 /// Panics on failure: without a database the server has no reason to run.
@@ -104,7 +126,11 @@ struct SampleIn {
     idle_s: i64,
 }
 
-async fn post_samples(State(state): State<AppState>, body: String) -> Response {
+async fn post_samples(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+    body: String,
+) -> Response {
     // Parsed by hand (not the Json extractor) so that every kind of client
     // mistake gets a 400 with a reason; axum's extractor 422s some of them.
     let req: SamplesRequest = match serde_json::from_str(&body) {
@@ -153,7 +179,12 @@ async fn post_samples(State(state): State<AppState>, body: String) -> Response {
     if let Err(e) = tx.commit() {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}"));
     }
-    debug!(source = %req.source, accepted = req.samples.len(), "stored samples batch");
+    debug!(
+        source = %req.source,
+        peer = %peer_ip(peer.map(|Extension(ConnectInfo(address))| address)),
+        accepted = req.samples.len(),
+        "stored samples batch"
+    );
     Json(serde_json::json!({ "accepted": req.samples.len() })).into_response()
 }
 

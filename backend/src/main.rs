@@ -1,5 +1,6 @@
 use are_you_up_backend::{app, open_db};
 use clap::Parser;
+use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
 /// Stores raw activity samples and serves derived active/idle intervals.
@@ -35,7 +36,10 @@ async fn main() {
         .await
         .expect("bind --addr; the address must be free and well-formed");
     tracing::info!(addr = %args.addr, db = %args.db, "listening");
-    axum::serve(listener, app(conn))
+    axum::serve(
+        listener,
+        app(conn).into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .await
         .expect("serve fails only on unrecoverable accept errors");
 }
