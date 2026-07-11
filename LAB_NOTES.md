@@ -317,3 +317,46 @@ after the run) against the real `Syncer`, plus two code traces:
   skips `errorStream`, which only forfeits keep-alive reuse - and
   `disconnect()` in `finally` forfeits that anyway by closing the
   socket. At ~3 batches/day, connection reuse is worthless here.
+
+## 2026-07-11 - SampleJob threading and schedule-guard analysis (android Task 7 quality review)
+
+Reasoned from SDK contracts (no device attached in this review; the
+on-device confirmations are listed for Task 9). Verified the build:
+`./gradlew test assembleDebug` green, 33 tests x2 variants.
+
+- **Same-job overlap**: JobScheduler serializes executions of one job
+  id - a periodic job is "active" from onStartJob until jobFinished or
+  onStopJob completes, and the next period will not launch while it is
+  active. The only overlap window is `onStopJob -> true` while the
+  untracked worker thread keeps running (nothing interrupts it), after
+  which a rescheduled run can start a second `runOnce` concurrently.
+  Traced the consequences: SharedPreferences is a per-file in-process
+  singleton with internally synchronized reads/writes, so racing cursor
+  writes interleave to one of two near-identical values; the overlapped
+  span is re-replayed idempotently (level-based events, local `INSERT
+  OR IGNORE`, server upsert on `(source, ts)`). Two Store instances on
+  one WAL db can at worst throw `SQLiteDatabaseLockedException` on
+  concurrent write, which the job's catch-all turns into
+  log-and-retry-next-run. Concluded: safe by idempotence, no fix
+  needed - but the safety chain is non-obvious and deserves a comment
+  in SampleJob.
+- **jobFinished after onStopJob**: the framework ignores completion
+  callbacks for a job it no longer considers active (logs a warning,
+  no exception). No double-jobFinished path exists: one thread per
+  onStartJob, one jobFinished per thread.
+- **schedule() guard vs JobInfo changes**: persisted JobScheduler jobs
+  survive `adb install -r` (package update does not cancel jobs; only
+  force-stop, data clear, or uninstall do). The `getPendingJob(JOB_ID)
+  != null` early-return therefore pins the OLD JobInfo forever across
+  the project's own documented upgrade flow (`git pull && make
+  install`): a future PERIOD_MS change would silently never apply.
+  Comparing `pending.intervalMillis != PERIOD_MS` (the getter returns
+  the clamped value, so this is stable for periods >= the 15-min
+  platform floor) keeps phase preservation in the common case and
+  self-heals on upgrades.
+- **Prefs.apply() ordering**: apply() mutates the in-memory map
+  synchronously and queues the disk write; job-thread writes are
+  visible to the UI thread immediately (same singleton). The only loss
+  window is process death before the queued write commits - the cursor
+  regresses at most one run and the replay is idempotent, so no
+  read-after-write bug exists in-process.

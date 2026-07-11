@@ -36,9 +36,13 @@ class SampleJob : JobService() {
         fun schedule(context: Context) {
             val scheduler = context.getSystemService(JobScheduler::class.java)
             // Re-scheduling an existing periodic job resets its phase, so
-            // only schedule when absent (e.g. first launch, or after a
-            // force-stop cancelled it).
-            if (scheduler.getPendingJob(JOB_ID) != null) return
+            // return early when the pending job already matches. But ONLY
+            // then: persisted jobs survive app updates (the documented
+            // upgrade flow is git pull && make install), so a changed
+            // PERIOD_MS must invalidate the stale pending job or it would
+            // pin the old parameters forever.
+            val pending = scheduler.getPendingJob(JOB_ID)
+            if (pending != null && pending.intervalMillis == PERIOD_MS) return
             scheduler.schedule(
                 JobInfo.Builder(JOB_ID, ComponentName(context, SampleJob::class.java))
                     .setPeriodic(PERIOD_MS)
@@ -66,7 +70,11 @@ class SampleJob : JobService() {
         return true // work continues on the worker thread
     }
 
-    override fun onStopJob(params: JobParameters): Boolean = true // retry later
+    // true = retry later. The worker thread is deliberately not
+    // interrupted; if its run overlaps the retry, the overlap is safe by
+    // idempotence (level-based event replay, INSERT OR IGNORE, server
+    // upsert - see LAB_NOTES 2026-07-11).
+    override fun onStopJob(params: JobParameters): Boolean = true
 
     private fun runOnce(context: Context) {
         val prefs = Prefs(context)
@@ -94,17 +102,20 @@ class SampleJob : JobService() {
             }
             prefs.cursor = result.next
 
+            val samplesNote =
+                if (prefs.paused) "${result.sampleTimesMs.size} samples dropped (paused)"
+                else "${result.sampleTimesMs.size} samples"
             val outcome = Syncer(prefs.serverUrl, prefs.source).sync(store)
             val summary = when (outcome) {
                 is Syncer.Outcome.Ok -> {
                     prefs.lastSyncTs = Timestamps.format(now)
                     store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
                     "${Timestamps.format(now)}: ${events.size} events, " +
-                        "${result.sampleTimesMs.size} samples, synced ${outcome.synced}"
+                        "$samplesNote, synced ${outcome.synced}"
                 }
                 is Syncer.Outcome.Failed ->
                     "${Timestamps.format(now)}: ${events.size} events, " +
-                        "${result.sampleTimesMs.size} samples, " +
+                        "$samplesNote, " +
                         "sync FAILED after ${outcome.synced}: ${outcome.reason}"
             }
             prefs.lastRunSummary = summary

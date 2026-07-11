@@ -29,6 +29,8 @@
   re-emitted rows), but Task 7's SampleJob should clamp
   `now = max(now, cursor.tsMs)` - or skip the run - when the clock has
   regressed. See LAB_NOTES.md 2026-07-11 Task 4 probe entry.
+  (Resolved 2026-07-11: Task 7's `SampleJob.runOnce` clamps
+  `now = maxOf(System.currentTimeMillis(), cursor.tsMs)`.)
 - Android `Syncer.postVerified` reads the response body with an
   unbounded `readBytes()`. A hostile or broken server streaming an
   enormous body would raise `OutOfMemoryError`, which - being an
@@ -37,3 +39,10 @@
   ~20 bytes) and harmless to the mark-synced invariant (crash happens
   before marking), and the mac twin buffers unboundedly too; a bounded
   read (a valid ack fits in 4KB) would close it if ever revisited.
+- Android `MainActivity`'s save button persists whatever survives
+  `trim().trimEnd('/')` with no URL validation: saving an empty or
+  garbage string stores it verbatim and every sync fails with "request
+  failed" until corrected (visible in the status text, so recoverable,
+  but a `Uri.parse` sanity check would fail at the moment of the typo
+  instead). The EditText also keeps the un-normalized text the user
+  typed while the stored value is trimmed - cosmetic mismatch.
