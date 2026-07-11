@@ -6,3 +6,5 @@ mac/.build/
 .worktrees/
 .lavish/
 .claude/settings.local.json
+*.db-shm
+*.db-wal
