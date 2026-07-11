@@ -128,3 +128,38 @@ the `android.useAndroidX` property is not enabled", listing Robolectric's
 androidx.test transitive deps - exactly what the gradle.properties
 comment claims. The flag is load-bearing for tests despite the
 zero-androidx runtime.
+
+## 2026-07-11 - Pixel 7 usage-event probe: spec assumptions confirmed
+
+Ran the Task 2 probe (dump button -> logcat) on the physical Pixel 7
+(Android 16, API 36) after granting Usage Access, following a scripted
+lock/peek/unlock sequence. 82 screen/keyguard events in the last 2h,
+epoch-ms timestamps, strictly ordered, matching wall clock (latest event
+11:56:53+03:00 vs 11:57:04 logcat line).
+
+Confirmed:
+- All four event types appear as assumed: SCREEN_INTERACTIVE /
+  SCREEN_NON_INTERACTIVE / KEYGUARD_HIDDEN / KEYGUARD_SHOWN.
+- Unlock ordering is SCREEN_INTERACTIVE first, KEYGUARD_HIDDEN 1.5-7s
+  later (lock-screen dwell + face unlock). Windows therefore correctly
+  start at KEYGUARD_HIDDEN, excluding lock-screen dwell.
+- Lock-screen peeks (screen on without unlocking - ambient/notification
+  checks, typically exactly ~10s) produce SCREEN pairs with no
+  KEYGUARD_HIDDEN and are common (dozens in 2h). The screenOn&&unlocked
+  state machine correctly ignores them.
+- Events from BEFORE the app was installed are returned (2h window
+  fully populated minutes after install): retention is system-side, so
+  job downtime loses nothing within retention.
+
+Deviations from the spec's mental model (both benign):
+- On this device KEYGUARD_SHOWN re-engages 0.7-5s after every
+  SCREEN_NON_INTERACTIVE, so the "re-light inside the lock delay with
+  no keyguard events" scenario the Synthesizer supports is rare here;
+  the common no-keyguard-event pattern is the lock-screen peek, which
+  the same state machine handles.
+- DEVICE_SHUTDOWN/STARTUP not observed (no reboot during the window);
+  handling remains defensive-only until a reboot happens to be covered
+  by a later dump.
+
+Conclusion: the retrospective event-replay design (ADR-0007) is sound
+on the target device; Synthesizer event mapping needs no changes.
