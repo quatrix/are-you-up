@@ -146,6 +146,16 @@ per-source activeness before merging, and `source` narrows the input
 set.
 
 ```
+GET / -> 200 text/html
+```
+
+The timeline visualization (added 2026-07-11): a single self-contained
+page embedded in the server binary. Date pickers with today / last week
+/ last month presets; one 24h row per local-time day; colored segments
+from `consolidate=true` (macbook / pixel / both), per-day active
+totals, hover tooltips. Served same-origin so no CORS surface exists.
+
+```
 GET /healthz -> 200 "ok"
 ```
 

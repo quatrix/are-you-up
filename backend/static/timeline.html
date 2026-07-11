@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>are-you-up timeline</title>
+<style>
+  :root {
+    --bg: #101014; --row: #1a1a21; --text: #d8d8de; --dim: #7d7d88;
+    --mac: #4a9eff; --pixel: #3ddc84; --both: #f5a623; --other: #c678dd;
+    --grid: #26262e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, system-ui, sans-serif;
+    padding: 24px; max-width: 1100px; margin: 0 auto;
+  }
+  h1 { font-size: 18px; margin-bottom: 16px; }
+  h1 span { color: var(--dim); font-weight: normal; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .controls label { color: var(--dim); }
+  input[type=date] {
+    background: var(--row); color: var(--text); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 4px 8px; font: inherit; color-scheme: dark;
+  }
+  button {
+    background: var(--row); color: var(--text); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 4px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); }
+  .legend { display: flex; gap: 16px; margin: 14px 0 20px; color: var(--dim); }
+  .legend i {
+    display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+    margin-right: 6px; vertical-align: -1px;
+  }
+  #error {
+    display: none; background: #3a1518; color: #ff8a8a;
+    padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;
+  }
+  /* Left/right margins mirror the .day label/total columns so the axis
+     lines up with the tracks. */
+  #axis { position: relative; height: 18px; margin: 0 76px 4px 140px; color: var(--dim); font-size: 11px; }
+  #axis span { position: absolute; transform: translateX(-50%); }
+  .day { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .day .label { width: 128px; text-align: right; color: var(--dim); white-space: nowrap; font-size: 12px; }
+  .day .label b { color: var(--text); font-weight: 600; }
+  .day .track {
+    position: relative; flex: 1; height: 26px; background: var(--row);
+    border-radius: 4px;
+    background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px);
+    background-size: calc(100% / 24) 100%;
+  }
+  .day .total { width: 64px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .seg { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; min-width: 2px; }
+  .seg.mac { background: var(--mac); }
+  .seg.pixel { background: var(--pixel); }
+  .seg.both { background: var(--both); }
+  .seg.other { background: var(--other); }
+</style>
+</head>
+<body>
+<h1>are-you-up <span>timeline</span></h1>
+
+<div class="controls">
+  <label>from <input type="date" id="from"></label>
+  <label>to <input type="date" id="to"></label>
+  <button data-days="1">today</button>
+  <button data-days="7">last week</button>
+  <button data-days="30">last month</button>
+</div>
+
+<div class="legend">
+  <span><i style="background:var(--mac)"></i>macbook</span>
+  <span><i style="background:var(--pixel)"></i>pixel</span>
+  <span><i style="background:var(--both)"></i>both</span>
+</div>
+
+<div id="error"></div>
+<div id="axis"></div>
+<div id="days"></div>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const el = (tag, cls) => { const e = document.createElement(tag); e.className = cls; return e; };
+const pad = n => String(n).padStart(2, "0");
+
+// ---- local-time date plumbing --------------------------------------------
+// Everything renders in the BROWSER's timezone. The server stores and
+// returns instants with offsets (ADR-0004), so parsing is exact; day rows
+// are local midnight to local midnight, which also makes DST days honestly
+// 23h or 25h wide.
+
+const fmtDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// noon avoids any DST-midnight edge when stepping calendar days
+const addDays = (dateStr, n) => {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return fmtDate(d);
+};
+const offsetAt = d => {
+  const m = -d.getTimezoneOffset();
+  const a = Math.abs(m);
+  return `${m < 0 ? "-" : "+"}${pad(Math.floor(a / 60))}:${pad(a % 60)}`;
+};
+// RFC 3339 local midnight, with the offset in effect on that date
+const localMidnightRfc = dateStr => {
+  const d = new Date(dateStr + "T00:00:00");
+  return `${dateStr}T00:00:00${offsetAt(d)}`;
+};
+const hm = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmtDur = ms => {
+  const m = Math.round(ms / 60000);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${pad(m % 60)}m` : `${m}m`;
+};
+
+// ---- rendering -------------------------------------------------------------
+
+const classify = sources =>
+  sources.length > 1 ? "both"
+  : sources[0] === "macbook" ? "mac"
+  : sources[0] === "pixel" ? "pixel"
+  : "other"; // future devices: violet, exact names in the tooltip
+
+function render(fromDate, toDate, intervals) {
+  const days = $("days");
+  days.innerHTML = "";
+  const ivs = intervals.map(iv => ({
+    s: new Date(iv.start).getTime(),
+    e: new Date(iv.end).getTime(),
+    sources: iv.sources,
+  }));
+
+  for (let day = fromDate; day <= toDate; day = addDays(day, 1)) {
+    const dayStart = new Date(day + "T00:00:00").getTime();
+    const dayEnd = new Date(addDays(day, 1) + "T00:00:00").getTime();
+    const dayMs = dayEnd - dayStart;
+
+    const row = el("div", "day");
+    const label = el("div", "label");
+    const dow = new Date(dayStart).toLocaleDateString(undefined, { weekday: "short" });
+    label.innerHTML = `${dow} <b>${day}</b>`;
+
+    const track = el("div", "track");
+    let total = 0;
+    for (const iv of ivs) {
+      if (iv.e < dayStart || iv.s >= dayEnd) continue;
+      const s = Math.max(iv.s, dayStart);
+      const e = Math.min(iv.e, dayEnd);
+      const seg = el("div", "seg " + classify(iv.sources));
+      seg.style.left = ((s - dayStart) / dayMs * 100) + "%";
+      seg.style.width = ((e - s) / dayMs * 100) + "%"; // min-width keeps slivers visible
+      seg.title = `${hm(s)}-${hm(e)}  ${iv.sources.join(" + ")}`;
+      track.appendChild(seg);
+      total += e - s;
+    }
+
+    const totalDiv = el("div", "total");
+    totalDiv.textContent = total ? fmtDur(total) : "";
+    row.append(label, track, totalDiv);
+    days.appendChild(row);
+  }
+}
+
+// ---- data loading ----------------------------------------------------------
+
+async function load() {
+  const fromDate = $("from").value;
+  const toDate = $("to").value;
+  const err = $("error");
+  err.style.display = "none";
+  if (!fromDate || !toDate) return;
+  if (fromDate > toDate) {
+    err.textContent = "from must be on or before to";
+    err.style.display = "block";
+    return;
+  }
+  // half-open [from 00:00, day-after-to 00:00), local offsets; the page is
+  // served by the backend itself, so this is a same-origin request
+  const qs = new URLSearchParams({
+    from: localMidnightRfc(fromDate),
+    to: localMidnightRfc(addDays(toDate, 1)),
+    consolidate: "true",
+  });
+  try {
+    const res = await fetch("/v1/intervals?" + qs);
+    if (!res.ok) throw new Error(`server returned ${res.status}: ${await res.text()}`);
+    const body = await res.json();
+    render(fromDate, toDate, body.intervals);
+  } catch (e) {
+    $("days").innerHTML = "";
+    err.textContent = "failed to load: " + e.message;
+    err.style.display = "block";
+  }
+}
+
+// ---- wiring ----------------------------------------------------------------
+
+for (let h = 0; h <= 24; h += 3) {
+  const s = document.createElement("span");
+  s.textContent = pad(h);
+  s.style.left = (h / 24 * 100) + "%";
+  $("axis").appendChild(s);
+}
+
+for (const b of document.querySelectorAll("button[data-days]")) {
+  b.addEventListener("click", () => {
+    const n = Number(b.dataset.days);
+    const today = fmtDate(new Date());
+    $("to").value = today;
+    $("from").value = addDays(today, -(n - 1));
+    load();
+  });
+}
+$("from").addEventListener("change", load);
+$("to").addEventListener("change", load);
+
+// default view: today
+$("to").value = fmtDate(new Date());
+$("from").value = $("to").value;
+load();
+</script>
+</body>
+</html>

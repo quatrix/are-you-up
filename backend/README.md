@@ -86,6 +86,10 @@ Upgrading:
       not returned. consolidate must be exactly true or false (else 400);
       composes with threshold_s and source.
 
+    GET / -> the timeline visualization (self-contained HTML page):
+      date pickers + today/last-week/last-month presets, one 24h line
+      per day showing consolidated awake time (macbook / pixel / both).
+
     GET /healthz -> "ok"
 
 ## Test

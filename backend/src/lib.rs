@@ -58,6 +58,7 @@ pub fn app(conn: Connection) -> Router {
         db: Arc::new(Mutex::new(conn)),
     };
     Router::new()
+        .route("/", get(timeline))
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/samples", post(post_samples))
         .route("/v1/intervals", get(get_intervals))
@@ -65,6 +66,14 @@ pub fn app(conn: Connection) -> Router {
         // enable with RUST_LOG=debug or RUST_LOG=tower_http=debug.
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The timeline visualization: one self-contained page (vanilla JS/CSS, no
+/// CDNs), embedded in the binary so deployment stays copy-one-file. It
+/// fetches /v1/intervals?consolidate=true from the same origin, so no CORS
+/// machinery exists or is needed; tailscale remains the only perimeter.
+async fn timeline() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../static/timeline.html"))
 }
 
 /// Uniform JSON error body. Client mistakes are always 4xx, never 500.

@@ -447,3 +447,15 @@ async fn consolidate_composes_with_source_filter() {
         ])
     );
 }
+
+#[tokio::test]
+async fn root_serves_the_timeline_page() {
+    let app = test_app();
+    let (status, body) = send(&app, "GET", "/", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.as_str()
+            .is_some_and(|html| html.contains("<title>are-you-up timeline</title>")),
+        "body: {body}"
+    );
+}
