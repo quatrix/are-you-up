@@ -150,6 +150,39 @@ No notification of any kind. Logging goes to logcat, tag `are-you-up`,
 one info line per job run; `adb logcat -s are-you-up` is the tail
 (filling the mac's log-file role).
 
+## Build, install, and operate
+
+Toolchain: JDK 17+ and the Android SDK command-line tools (installable
+via `brew install --cask android-commandlinetools` plus
+`sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"`);
+no Android Studio required. The Gradle wrapper (`gradlew`) is checked in,
+so builds need nothing else.
+
+`android/Makefile`, following the backend/mac convention:
+
+    make build      # ./gradlew assembleDebug -> app-debug.apk
+    make test       # ./gradlew test (JVM unit tests, no device needed)
+    make install    # build + adb install -r on the connected phone
+    make run        # install + adb shell am start (launches the activity)
+    make log        # adb logcat -s are-you-up (the tail)
+    make clean      # ./gradlew clean
+
+Getting it on the Pixel 7 (documented step-by-step in
+`android/README.md`):
+
+1. On the phone: Settings -> About phone -> tap Build number 7x to
+   enable Developer options, then enable USB debugging.
+2. Plug in via USB, accept the debugging prompt, `make install`.
+3. Open the app once: grant Usage Access via the in-app button, check
+   the server URL, done. The persisted job is armed from that point,
+   surviving reboots; the phone never needs to be plugged in again.
+
+Upgrading is `git pull && make install` (debug-keystore signatures
+match, so `-r` reinstalls in place and the sqlite buffer, prefs, and
+cursor survive). The APK is signed with the local debug keystore -
+sufficient for sideloading on one owned device, and deliberately not a
+release-signing setup.
+
 ## Error handling
 
 - **Server unreachable:** rows buffer locally; next job run retries.
