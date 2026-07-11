@@ -403,3 +403,31 @@ design depends on it beyond what (c)-(g) already proved.
 
 Conclusion: the retrospective event-replay client works end to end on
 the target device, including every recovery path we could trigger.
+
+## 2026-07-11 - Live deployment E2E: client backlog flush + interval derivation verified
+
+Pointed the installed mac client at the production backend
+(100.88.181.84:8080, tailnet) by editing `server_url` in
+`~/Library/Application Support/are-you-up/config.json` and restarting the
+LaunchAgent (`launchctl kickstart -k gui/$UID/com.are-you-up.mac`).
+
+Observed in `~/Library/Logs/are-you-up.log`: hours of `sync failed after 0
+samples, will retry: server returned status 405` (the port-8080 collision
+noted in SESSION.md - an unrelated local service answered 405; the ack
+check correctly refused to mark anything synced), then immediately after
+restart `synced 244 samples` - the entire buffered backlog flushed in one
+batch.
+
+Verified server-side with
+`GET /v1/intervals?from=2026-07-11T08:00:00%2B03:00&to=...&source=macbook`:
+returned 6 intervals matching real usage - a no-data gap before 08:11
+(laptop asleep, >90s sample gap yields no interval), a merged 1.5h active
+block (~180 samples), a zero-length idle interval at 09:49:21 (single
+sample where idle_s crossed the 900s threshold before input resumed 30s
+later - expected artifact of per-sample threshold classification), and
+timestamps echoed verbatim as RFC 3339 `+03:00`.
+
+Conclusion: the offline-buffer -> ack-verified sync -> query-time
+derivation pipeline works end to end against a real deployment, and the
+captive-portal-style failure mode (bare non-ack responses) demonstrably
+loses no data.
