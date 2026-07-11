@@ -1,0 +1,26 @@
+[Unit]
+Description=are-you-up activity tracker backend
+Documentation=https://github.com/quatrix/are-you-up
+After=network-online.target
+Wants=network-online.target
+# If you bind the tailnet IP in ExecStart, also order after tailscale:
+#After=tailscaled.service
+
+[Service]
+# Prefer the machine's tailnet IP over 0.0.0.0 if the box has interfaces
+# outside the tailnet: the API deliberately has no auth.
+ExecStart=/usr/local/bin/are-you-up-backend --addr 0.0.0.0:8080 --db /var/lib/are-you-up/are-you-up.db
+Environment=RUST_LOG=info
+
+# Transient unprivileged user; systemd creates and owns /var/lib/are-you-up
+# (StateDirectory) with correct permissions. DynamicUser also implies most
+# filesystem sandboxing (ProtectSystem=strict, ProtectHome, PrivateTmp,
+# NoNewPrivileges).
+DynamicUser=yes
+StateDirectory=are-you-up
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

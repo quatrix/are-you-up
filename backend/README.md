@@ -23,6 +23,48 @@ Logging goes to stdout via `tracing`; `RUST_LOG` controls verbosity
 Server faults (5xx) always log at `error`; client mistakes (4xx) only
 appear at `debug`.
 
+## Run as a systemd service (Ubuntu)
+
+One-time setup, on the server:
+
+    # prerequisites: a C compiler (bundled sqlite) and rust via rustup
+    # (rustup honors backend/rust-toolchain.toml automatically)
+    sudo apt install -y build-essential curl
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+    git clone https://github.com/quatrix/are-you-up.git
+    cd are-you-up/backend
+    cargo build --release
+    sudo cp target/release/are-you-up-backend /usr/local/bin/
+    sudo cp systemd/are-you-up.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now are-you-up
+
+The unit (`systemd/are-you-up.service`) runs as a transient
+unprivileged user (`DynamicUser`) with the database in
+`/var/lib/are-you-up/` (`StateDirectory`, created and owned by
+systemd), restarts on failure, and logs to the journal.
+
+Operating it:
+
+    systemctl status are-you-up
+    journalctl -u are-you-up -f              # follow the logs
+    sudo systemctl edit are-you-up           # drop-in override, e.g. Environment=RUST_LOG=debug
+    sudo systemctl restart are-you-up
+
+The shipped unit binds `0.0.0.0:8080`. The API has no auth by design,
+so if the box has interfaces outside your tailnet, edit `--addr` in
+`ExecStart` to the machine's tailnet IP (and uncomment the
+`After=tailscaled.service` line so the bind happens after tailscale is
+up).
+
+Upgrading:
+
+    cd are-you-up && git pull
+    cd backend && cargo build --release
+    sudo cp target/release/are-you-up-backend /usr/local/bin/
+    sudo systemctl restart are-you-up
+
 ## API
 
     POST /v1/samples
