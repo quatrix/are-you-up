@@ -10,28 +10,58 @@ import android.os.Process
 import android.provider.Settings
 import android.util.Log
 import android.widget.Button
+import android.widget.EditText
+import android.widget.Switch
 import android.widget.TextView
+import dev.areyouup.core.Store
 
+// The only UI: status + config. Opening it is also what (re)arms the
+// job - including after a force-stop, which cancels persisted jobs.
 class MainActivity : Activity() {
 
-    companion object {
-        const val TAG = "are-you-up"
-    }
+    private lateinit var prefs: Prefs
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.main)
+        prefs = Prefs(this)
 
+        findViewById<EditText>(R.id.server_url).setText(prefs.serverUrl)
+        findViewById<Button>(R.id.save).setOnClickListener {
+            prefs.serverUrl =
+                findViewById<EditText>(R.id.server_url).text.toString().trim().trimEnd('/')
+            refresh()
+        }
+        findViewById<Switch>(R.id.paused).setOnCheckedChangeListener { _, checked ->
+            prefs.paused = checked
+        }
         findViewById<Button>(R.id.grant).setOnClickListener {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         }
         findViewById<Button>(R.id.dump).setOnClickListener { dumpRecentEvents() }
+
+        SampleJob.schedule(this)
     }
 
     override fun onResume() {
         super.onResume()
-        findViewById<TextView>(R.id.status).text =
-            "usage access: ${if (hasUsageAccess()) "granted" else "NOT GRANTED"}"
+        refresh()
+    }
+
+    private fun refresh() {
+        findViewById<Switch>(R.id.paused).isChecked = prefs.paused
+        val store = Store(this)
+        val unsynced = try {
+            store.unsyncedCount()
+        } finally {
+            store.close()
+        }
+        findViewById<TextView>(R.id.status).text = """
+            usage access: ${if (hasUsageAccess()) "granted" else "NOT GRANTED"}
+            last run: ${prefs.lastRunSummary}
+            last successful sync: ${prefs.lastSyncTs}
+            unsynced samples: $unsynced
+        """.trimIndent()
     }
 
     private fun hasUsageAccess(): Boolean {
@@ -61,9 +91,9 @@ class MainActivity : Activity() {
                 UsageEvents.Event.DEVICE_STARTUP -> "DEVICE_STARTUP"
                 else -> continue
             }
-            Log.i(TAG, "event $name at ${e.timeStamp}")
+            Log.i(SampleJob.TAG, "event $name at ${e.timeStamp}")
             n++
         }
-        Log.i(TAG, "dump: $n screen/keyguard events in last 2h")
+        Log.i(SampleJob.TAG, "dump: $n screen/keyguard events in last 2h")
     }
 }

@@ -1,0 +1,140 @@
+package dev.areyouup
+
+import android.app.job.JobInfo
+import android.app.job.JobParameters
+import android.app.job.JobScheduler
+import android.app.job.JobService
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
+import android.content.ComponentName
+import android.content.Context
+import android.util.Log
+import dev.areyouup.core.Store
+import dev.areyouup.core.Syncer
+import dev.areyouup.core.Synthesizer
+import dev.areyouup.core.Timestamps
+import kotlin.concurrent.thread
+
+// ==========================================================================
+// The entire runtime of the app (ADR-0007)
+// ==========================================================================
+//
+// A persisted 15-minute periodic job: replay system screen/keyguard
+// events from the stored cursor, synthesize samples, buffer, sync,
+// prune, exit. No other component of this app ever runs in the
+// background - do not add receivers, services, alarms, or wakelocks.
+class SampleJob : JobService() {
+
+    companion object {
+        const val TAG = "are-you-up"
+        private const val JOB_ID = 1
+        private const val PERIOD_MS = 15 * 60 * 1000L
+        private const val PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000L
+
+        // No constraints beyond the period: the job must run even with no
+        // network (samples buffer; sync just fails and retries next run).
+        fun schedule(context: Context) {
+            val scheduler = context.getSystemService(JobScheduler::class.java)
+            // Re-scheduling an existing periodic job resets its phase, so
+            // only schedule when absent (e.g. first launch, or after a
+            // force-stop cancelled it).
+            if (scheduler.getPendingJob(JOB_ID) != null) return
+            scheduler.schedule(
+                JobInfo.Builder(JOB_ID, ComponentName(context, SampleJob::class.java))
+                    .setPeriodic(PERIOD_MS)
+                    .setPersisted(true) // survives reboot; needs RECEIVE_BOOT_COMPLETED
+                    .build()
+            )
+            Log.i(TAG, "job scheduled: every ${PERIOD_MS / 60_000} min, persisted")
+        }
+    }
+
+    // Jobs start on the main thread; sqlite + network work happens on a
+    // worker thread that reports completion via jobFinished.
+    override fun onStartJob(params: JobParameters): Boolean {
+        thread(name = "are-you-up-job") {
+            try {
+                runOnce(applicationContext)
+            } catch (e: Exception) {
+                // Log-and-finish keeps the periodic schedule alive. No
+                // usage is lost: the cursor only advances after synthesis
+                // and insertion succeeded, so the next run replays.
+                Log.e(TAG, "job failed: ${e.message}", e)
+            }
+            jobFinished(params, false)
+        }
+        return true // work continues on the worker thread
+    }
+
+    override fun onStopJob(params: JobParameters): Boolean = true // retry later
+
+    private fun runOnce(context: Context) {
+        val prefs = Prefs(context)
+        // First run ever: start at the current instant - history before
+        // install is not reported (spec: no backfill).
+        val cursor = prefs.cursor
+            ?: Synthesizer.Cursor(System.currentTimeMillis(), screenOn = false, unlocked = false)
+        // Clamped against backward clock steps (NTP/carrier resync between
+        // runs): now < cursor.tsMs would synthesize a spurious past sample
+        // and regress the cursor (LAB_NOTES 2026-07-11). Clamping turns the
+        // run into a no-op span instead; the next run heals naturally.
+        val now = maxOf(System.currentTimeMillis(), cursor.tsMs)
+
+        val events = queryEvents(context, cursor.tsMs, now)
+        val result = Synthesizer.synthesize(cursor, events, now)
+
+        val store = Store(context)
+        try {
+            if (prefs.paused) {
+                // Paused spans become permanent gaps: drop the samples but
+                // still advance the cursor (mac pause semantics).
+                Log.i(TAG, "paused: dropped ${result.sampleTimesMs.size} samples")
+            } else {
+                for (t in result.sampleTimesMs) store.insert(Timestamps.format(t), 0)
+            }
+            prefs.cursor = result.next
+
+            val outcome = Syncer(prefs.serverUrl, prefs.source).sync(store)
+            val summary = when (outcome) {
+                is Syncer.Outcome.Ok -> {
+                    prefs.lastSyncTs = Timestamps.format(now)
+                    store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
+                    "${Timestamps.format(now)}: ${events.size} events, " +
+                        "${result.sampleTimesMs.size} samples, synced ${outcome.synced}"
+                }
+                is Syncer.Outcome.Failed ->
+                    "${Timestamps.format(now)}: ${events.size} events, " +
+                        "${result.sampleTimesMs.size} samples, " +
+                        "sync FAILED after ${outcome.synced}: ${outcome.reason}"
+            }
+            prefs.lastRunSummary = summary
+            Log.i(TAG, summary)
+        } finally {
+            store.close()
+        }
+    }
+
+    // Maps the system's usage events to the Synthesizer's platform-free
+    // event type. Without the Usage Access grant, queryEvents just
+    // returns nothing: the job logs "0 events" and the activity shows
+    // the missing grant.
+    private fun queryEvents(context: Context, fromMs: Long, toMs: Long): List<Synthesizer.Event> {
+        val usm = context.getSystemService(UsageStatsManager::class.java)
+        val out = mutableListOf<Synthesizer.Event>()
+        val events = usm.queryEvents(fromMs, toMs)
+        val e = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            val kind = when (e.eventType) {
+                UsageEvents.Event.SCREEN_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_ON
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_OFF
+                UsageEvents.Event.KEYGUARD_HIDDEN -> Synthesizer.Event.Kind.UNLOCKED
+                UsageEvents.Event.KEYGUARD_SHOWN -> Synthesizer.Event.Kind.LOCKED
+                UsageEvents.Event.DEVICE_SHUTDOWN -> Synthesizer.Event.Kind.SHUTDOWN
+                else -> null
+            }
+            if (kind != null) out.add(Synthesizer.Event(e.timeStamp, kind))
+        }
+        return out.sortedBy { it.tsMs } // defensive; the API returns sorted
+    }
+}

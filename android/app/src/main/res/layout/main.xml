@@ -11,6 +11,25 @@
         android:layout_height="wrap_content"
         android:fontFamily="monospace" />
 
+    <EditText
+        android:id="@+id/server_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="server url"
+        android:inputType="textUri" />
+
+    <Button
+        android:id="@+id/save"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Save server url" />
+
+    <Switch
+        android:id="@+id/paused"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Paused" />
+
     <Button
         android:id="@+id/grant"
         android:layout_width="match_parent"
