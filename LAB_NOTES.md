@@ -531,3 +531,29 @@ and the raw view now shows them as idle. The 19:56/20:03 idle_s=0
 resets were left untouched (real return home). So pre-fix samples in
 the db can carry post-fix wall-clock values; the client dbs still hold
 the original frozen readings.
+
+## 2026-07-11 - ADR-0009 on-device verification: connectivity-constrained jobs need ACCESS_NETWORK_STATE (Robolectric doesn't enforce it)
+
+First install of the VPN-gated sync job crashed on the real Pixel in
+the self-healing schedule() call inside onStartJob:
+
+    java.lang.SecurityException: android.permission.ACCESS_NETWORK_STATE
+    required for jobs with a connectivity constraint
+    at com.android.server.job.JobSchedulerService$JobSchedulerStub.enforceValidJobRequest
+
+The Robolectric scheduling tests (SampleJobScheduleTest) all passed
+without the permission - Robolectric's JobScheduler shadow does not
+implement this enforcement, so JVM green does not prove a JobInfo is
+schedulable on a device. Fixed with a manifest
+`ACCESS_NETWORK_STATE` (normal install-time permission, no prompt).
+
+After the fix, `dumpsys jobscheduler` shows both jobs (`#u0a135/1`,
+`#u0a135/2`) with job 2 carrying `Required constraints: ... CONNECTIVITY`,
+and the mechanism proved itself unprompted: within ~1s of job 2 being
+scheduled (phone unlocked, tailscale up, constraint already satisfied)
+it fired WITHOUT any forced run and drained a 45-sample backlog -
+exactly the stale buffer the unconstrained design had been leaving
+behind. A subsequent forced run synced 0. Conclusion: constraint
+satisfaction works as an upload trigger as designed; device-only
+enforcement means job-scheduling changes always need one on-device
+smoke pass.

@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Required by the sync job's VPN network constraint (ADR-0009):
+         JobScheduler rejects connectivity-constrained jobs without it.
+         Verified on-device; Robolectric does not enforce this. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Special permission: the owner grants it once via
          Settings > Apps > Special app access > Usage access. -->
     <uses-permission
