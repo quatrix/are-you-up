@@ -7,7 +7,9 @@ sqlite and syncs to the backend every 60s. See
 ## Paths
 
 - Config:  `~/Library/Application Support/are-you-up/config.json`
-  (`{"server_url": "...", "source": "macbook"}`, created on first run)
+  (created on first run with localhost defaults; see
+  `config.json.example` for the schema - real endpoints stay out of
+  the repo, only in this file on the machine)
 - Data:    `~/Library/Application Support/are-you-up/client.db`
 - Log:     `~/Library/Logs/are-you-up.log` (tail it; set
   `ARE_YOU_UP_DEBUG=1` for per-sample lines)

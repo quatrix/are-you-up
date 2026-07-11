@@ -1,0 +1,4 @@
+{
+  "server_url": "http://<tailnet-ip>:8080",
+  "source": "macbook"
+}

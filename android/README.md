@@ -31,9 +31,12 @@ footprint and no notification. Design:
    then Settings > System > Developer options > enable "USB debugging".
 2. Plug the phone in over USB; accept the "Allow USB debugging?" prompt.
 3. `make run` (installs and launches).
-4. In the app: tap "Grant usage access" and enable are-you-up; check
-   the server URL; done. The job is now armed and survives reboots -
-   the cable is no longer needed.
+4. In the app: tap "Grant usage access" and enable are-you-up; type
+   the backend's URL (e.g. `http://<tailnet-ip>:8080` - there is
+   deliberately no committed default) and tap "Save server url"; done.
+   The job is now armed and survives reboots - the cable is no longer
+   needed. Until the URL is set, samples buffer locally and the status
+   line says "server url not configured".
 
 ## Operate
 
@@ -48,7 +51,7 @@ already-buffered rows continues. "Dump events to log" writes the last
 
 E2E smoke: use the phone for a minute, force a job run, then
 
-    curl "http://100.88.181.84:8080/v1/intervals?from=2026-07-11T00:00:00%2B03:00&to=2026-07-12T00:00:00%2B03:00&source=pixel"
+    curl "http://<server>:8080/v1/intervals?from=2026-07-11T00:00:00%2B03:00&to=2026-07-12T00:00:00%2B03:00&source=pixel"
 
 (with today's dates) should show an `active` interval covering that
 minute.

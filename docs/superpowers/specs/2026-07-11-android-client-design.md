@@ -134,9 +134,10 @@ connect/read timeouts.
 ## Config and UI
 
 `SharedPreferences` (the android-native config store, filling
-config.json's role on the mac): `server_url` (default
-`http://100.88.181.84:8080`), `source` (default `"pixel"`), `paused`
-(default `false`).
+config.json's role on the mac): `server_url` (no committed default -
+the real endpoint is deployment config, typed into the app once on
+first launch; blank means the job buffers without syncing), `source`
+(default `"pixel"`), `paused` (default `false`).
 
 `MainActivity`, one plain XML screen, is the only UI:
 

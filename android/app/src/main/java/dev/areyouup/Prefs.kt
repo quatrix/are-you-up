@@ -8,8 +8,12 @@ import dev.areyouup.core.Synthesizer
 class Prefs(context: Context) {
     private val p = context.getSharedPreferences("are-you-up", Context.MODE_PRIVATE)
 
+    // Deliberately no baked-in endpoint: the repo is public and the real
+    // address is deployment config, entered once in the app on first
+    // launch. Blank means "not configured yet" - the job skips syncing
+    // (samples still buffer) and the status screen says so.
     var serverUrl: String
-        get() = p.getString("server_url", "http://100.88.181.84:8080")!!
+        get() = p.getString("server_url", "")!!
         set(v) { p.edit().putString("server_url", v).apply() }
 
     var source: String

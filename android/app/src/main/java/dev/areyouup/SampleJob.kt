@@ -105,7 +105,13 @@ class SampleJob : JobService() {
             val samplesNote =
                 if (prefs.paused) "${result.sampleTimesMs.size} samples dropped (paused)"
                 else "${result.sampleTimesMs.size} samples"
-            val outcome = Syncer(prefs.serverUrl, prefs.source).sync(store)
+            // Blank URL = first launch, not yet configured: skip the
+            // doomed request but keep buffering; the summary names the
+            // actual fix instead of a cryptic connect error.
+            val outcome =
+                if (prefs.serverUrl.isBlank())
+                    Syncer.Outcome.Failed(0, "server url not configured (set it in the app)")
+                else Syncer(prefs.serverUrl, prefs.source).sync(store)
             val summary = when (outcome) {
                 is Syncer.Outcome.Ok -> {
                     // Only when rows actually reached the server: an

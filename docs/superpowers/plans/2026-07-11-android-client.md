@@ -27,8 +27,8 @@ read it first. The API contract is in
 
 **Conventions that apply to every task:** plain dash "-", never an em
 dash. Commit messages: semantic title, wrapped prose, no co-author line.
-Commands on a single line. The deployed backend for manual checks is
-`http://100.88.181.84:8080`.
+Commands on a single line. The deployed backend address for
+manual checks is deployment config - not committed; ask the owner.
 
 ---
 
@@ -1420,8 +1420,9 @@ import dev.areyouup.core.Synthesizer
 class Prefs(context: Context) {
     private val p = context.getSharedPreferences("are-you-up", Context.MODE_PRIVATE)
 
+    // No baked-in endpoint (public repo); blank = not configured yet.
     var serverUrl: String
-        get() = p.getString("server_url", "http://100.88.181.84:8080")!!
+        get() = p.getString("server_url", "")!!
         set(v) { p.edit().putString("server_url", v).apply() }
 
     var source: String
@@ -1905,7 +1906,7 @@ already-buffered rows continues. "Dump events to log" writes the last
 
 E2E smoke: use the phone for a minute, force a job run, then
 
-    curl "http://100.88.181.84:8080/v1/intervals?from=2026-07-11T00:00:00%2B03:00&to=2026-07-12T00:00:00%2B03:00&source=pixel"
+    curl "http://<server>:8080/v1/intervals?from=2026-07-11T00:00:00%2B03:00&to=2026-07-12T00:00:00%2B03:00&source=pixel"
 
 (with today's dates) should show an `active` interval covering that
 minute.
@@ -2047,7 +2048,7 @@ cd android && make run
 ```
 
 In the app: grant Usage Access (if not already), confirm the server URL
-is `http://100.88.181.84:8080`, confirm status shows
+is set to the deployed backend, confirm status shows
 "usage access: granted".
 
 - [ ] **Step 2: Generate usage and force a run (user assists)**
@@ -2068,7 +2069,7 @@ grid) and synced == M.
 - [ ] **Step 3: Verify server-side derivation**
 
 ```bash
-curl -sf "http://100.88.181.84:8080/v1/intervals?from=$(date +%Y-%m-%d)T00:00:00%2B03:00&to=$(date -v+1d +%Y-%m-%d)T00:00:00%2B03:00&source=pixel"
+curl -sf "http://<server>:8080/v1/intervals?from=$(date +%Y-%m-%d)T00:00:00%2B03:00&to=$(date -v+1d +%Y-%m-%d)T00:00:00%2B03:00&source=pixel"
 ```
 
 Expected: JSON with at least one `{"source": "pixel", ..., "state":
