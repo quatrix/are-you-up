@@ -31,4 +31,8 @@ dependencies {
     // non-functional org.json stubs. On the device the framework
     // implementation is used; this artifact never ships in the APK.
     testImplementation("org.json:json:20240303")
+    // Real loopback HTTP server for Syncer tests: unit tests compile
+    // against android.jar, which excludes JDK-internal modules like
+    // com.sun.net.httpserver (jdk.httpserver was never Android API).
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
