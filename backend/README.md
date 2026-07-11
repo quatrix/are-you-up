@@ -87,8 +87,11 @@ Upgrading:
       composes with threshold_s and source.
 
     GET / -> the timeline visualization (self-contained HTML page):
-      date pickers + today/last-week/last-month presets, one 24h line
-      per day showing consolidated awake time (macbook / pixel / both).
+      date pickers + today/yesterday/7d/30d presets. Each day is a 24h
+      row: an "awake" union lane (with a dim session envelope bridging
+      gaps < 15 min) over thin per-source attribution strips. Interior
+      gaps >= 3h are annotated as probable sleep; night hours shaded,
+      "now" marked, hover for exact times.
 
     GET /healthz -> "ok"
 

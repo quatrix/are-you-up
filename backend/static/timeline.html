@@ -3,133 +3,246 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>are-you-up timeline</title>
+<title>are-you-up · timeline</title>
 <style>
   :root {
-    --bg: #101014; --row: #1a1a21; --text: #d8d8de; --dim: #7d7d88;
-    --mac: #4a9eff; --pixel: #3ddc84; --both: #f5a623; --other: #c678dd;
-    --grid: #26262e;
-    /* tracks are lighter than chrome, with hourly lines and stronger
-       every-3h lines matching the axis labels */
-    --track: #22222b; --grid-h: #2c2c36; --grid-3h: #3c3c4a;
+    --bg: #0a0a0e;
+    --panel: #14141b;
+    --line: #23232e;
+    --text: #d6d4cc;
+    --dim: #6d6d7c;
+    --faint: #45454f;
+
+    --awake: #ece7d6;      /* union lane: "lights on" ivory */
+    --mac: #58a6ff;
+    --pixel: #3fdc97;
+    --x1: #c678dd;         /* future sources */
+    --x2: #ff7ab2;
+
+    --now: #ff6b5e;
+    --night: rgba(110, 140, 255, 0.05);
+    --grid-h: rgba(255, 255, 255, 0.035);
+    --grid-3h: rgba(255, 255, 255, 0.10);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
   body {
-    background: var(--bg); color: var(--text);
-    font: 14px/1.4 -apple-system, system-ui, sans-serif;
-    padding: 24px; max-width: 1100px; margin: 0 auto;
+    background: radial-gradient(1100px 480px at 50% -12%, #16161f 0%, var(--bg) 60%) fixed;
+    color: var(--text);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, "Cascadia Mono", monospace;
+    padding: 28px clamp(16px, 4vw, 48px) 64px;
+    max-width: 1240px; margin: 0 auto;
   }
-  h1 { font-size: 18px; margin-bottom: 16px; }
-  h1 span { color: var(--dim); font-weight: normal; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .controls label { color: var(--dim); }
+
+  /* ---- header ------------------------------------------------------- */
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px; margin-bottom: 6px; }
+  .wordmark { font-size: 13px; letter-spacing: .38em; text-transform: uppercase; color: var(--dim); }
+  .wordmark b { color: var(--text); font-weight: 600; }
+  #rangeStat { margin-left: auto; font-size: 12px; color: var(--dim); }
+  #rangeStat b { color: var(--awake); font-weight: 600; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 14px 0 4px; border-top: 1px solid var(--line); margin-top: 14px;
+  }
+  .controls .sep { flex: 1; }
   input[type=date] {
-    background: var(--row); color: var(--text); border: 1px solid var(--grid);
-    border-radius: 6px; padding: 4px 8px; font: inherit; color-scheme: dark;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 4px 8px; font: inherit;
   }
+  input[type=date]:focus { outline: none; border-color: var(--dim); }
   button {
-    background: var(--row); color: var(--text); border: 1px solid var(--grid);
-    border-radius: 6px; padding: 4px 12px; font: inherit; cursor: pointer;
+    background: transparent; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 4px; padding: 4px 12px; font: inherit; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .08em; cursor: pointer;
+    transition: color .12s, border-color .12s;
   }
-  button:hover { border-color: var(--dim); }
-  .legend { display: flex; gap: 16px; margin: 14px 0 20px; color: var(--dim); }
-  .legend i {
-    display: inline-block; width: 12px; height: 12px; border-radius: 3px;
-    margin-right: 6px; vertical-align: -1px;
-  }
+  button:hover { color: var(--text); border-color: var(--dim); }
+  button.active { color: var(--awake); border-color: var(--awake); }
+
+  .legend { display: flex; gap: 18px; padding: 10px 0 18px; color: var(--dim); font-size: 11px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
   #error {
-    display: none; background: #3a1518; color: #ff8a8a;
-    padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;
+    display: none; background: #2c1215; color: #ff9d94; border: 1px solid #55232a;
+    padding: 8px 12px; border-radius: 4px; margin-bottom: 16px;
   }
-  /* Left/right margins mirror the .day label/total columns so the axis
-     lines up with the tracks. */
-  #axis { position: relative; height: 18px; margin: 0 76px 4px 140px; color: var(--dim); font-size: 11px; }
-  #axis span { position: absolute; transform: translateX(-50%); }
-  .day { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-  .day .label { width: 128px; text-align: right; color: var(--dim); white-space: nowrap; font-size: 12px; }
-  .day .label b { color: var(--text); font-weight: 600; }
-  .day .track {
-    position: relative; flex: 1; height: 38px; background: var(--track);
-    border-radius: 4px;
-    background-image:
+
+  /* ---- axis + day grid ---------------------------------------------- */
+  /* Column skeleton shared by axis and rows: label | tracks | total */
+  .cols { display: grid; grid-template-columns: 88px 1fr 84px; gap: 14px; align-items: center; }
+
+  #axis {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--bg);
+    padding: 8px 0 6px;
+  }
+  #axis .scale { position: relative; height: 14px; }
+  #axis .scale span {
+    position: absolute; transform: translateX(-50%);
+    font-size: 10px; color: var(--dim); letter-spacing: .05em;
+  }
+
+  .day { margin-bottom: 12px; opacity: 0; animation: rise .35s ease forwards; animation-delay: calc(var(--i) * 22ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .day { animation: none; opacity: 1; } }
+
+  .day .label { text-align: right; line-height: 1.3; }
+  .day .label .dow { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--faint); }
+  .day .label .date { font-size: 13px; color: var(--text); }
+  .day .label .date.today { color: var(--awake); }
+
+  .day .lanes {
+    position: relative; border-radius: 5px; overflow: hidden;
+    background:
       linear-gradient(to right, var(--grid-3h) 1px, transparent 1px),
-      linear-gradient(to right, var(--grid-h) 1px, transparent 1px);
-    background-size: calc(100% / 8) 100%, calc(100% / 24) 100%;
+      linear-gradient(to right, var(--grid-h) 1px, transparent 1px),
+      var(--panel);
+    background-size: calc(100% / 8) 100%, calc(100% / 24) 100%, auto;
+    padding: 5px 0 4px;
   }
-  .day .total { width: 64px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  /* min-width keeps sub-pixel blips (a 30s phone check on a 24h axis)
-     visible; adjacent slivers may overdraw by a pixel, acceptable here */
-  .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 3px; min-width: 3px; }
-  .seg.mac { background: var(--mac); }
-  .seg.pixel { background: var(--pixel); }
-  .seg.both { background: var(--both); }
-  .seg.other { background: var(--other); }
+  .day:hover .lanes { background-color: #17171f; }
+
+  .night { position: absolute; top: 0; bottom: 0; background: var(--night); pointer-events: none; }
+
+  .lane { position: relative; height: 26px; }
+  .strip { position: relative; height: 6px; margin-top: 3px; }
+
+  /* session envelope: exact segments bridged across gaps < 15 min - the
+     dim block answers "was I around", the bright bits "when exactly" */
+  .env {
+    position: absolute; top: 2px; bottom: 2px; border-radius: 4px;
+    background: var(--awake); opacity: .22; pointer-events: none;
+  }
+  .seg {
+    position: absolute; top: 4px; bottom: 4px; border-radius: 2px; min-width: 3px;
+    background: var(--awake);
+    transition: filter .12s;
+  }
+  .seg:hover { filter: brightness(1.3); }
+  .strip .seg { top: 0; bottom: 0; border-radius: 1px; }
+
+  .nowline {
+    position: absolute; top: 0; bottom: 0; width: 1px;
+    background: var(--now); box-shadow: 0 0 6px var(--now); pointer-events: none;
+  }
+
+  .gaplabel {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+    font-size: 10px; color: var(--faint); letter-spacing: .06em; white-space: nowrap;
+  }
+  .cross { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.14); pointer-events: none; }
+  .crosstime {
+    position: absolute; top: 2px; transform: translateX(-50%);
+    font-size: 10px; color: var(--dim); background: rgba(10,10,14,.85);
+    padding: 0 4px; border-radius: 2px; pointer-events: none;
+  }
+
+  .day .total { font-size: 12px; color: var(--dim); line-height: 1.4; font-variant-numeric: tabular-nums; }
+  .day .total b { display: block; font-size: 14px; color: var(--awake); font-weight: 600; }
+  .day .total .by { font-size: 10px; color: var(--faint); }
+
+  /* ---- tooltip ------------------------------------------------------- */
+  #tip {
+    position: fixed; z-index: 10; display: none; pointer-events: none;
+    background: #1c1c26; border: 1px solid var(--line); border-radius: 4px;
+    padding: 5px 9px; font-size: 11px; color: var(--text); white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+  }
+  #tip .src { color: var(--dim); }
 </style>
 </head>
 <body>
-<h1>are-you-up <span>timeline</span></h1>
+
+<header>
+  <div class="wordmark"><b>are·you·up</b> timeline</div>
+  <div id="rangeStat"></div>
+</header>
 
 <div class="controls">
-  <label>from <input type="date" id="from"></label>
-  <label>to <input type="date" id="to"></label>
+  <input type="date" id="from"> <span style="color:var(--faint)">→</span> <input type="date" id="to">
+  <span class="sep"></span>
   <button data-days="1">today</button>
-  <button data-days="7">last week</button>
-  <button data-days="30">last month</button>
+  <button data-yesterday>yesterday</button>
+  <button data-days="7">7 days</button>
+  <button data-days="30">30 days</button>
 </div>
 
-<div class="legend">
-  <span><i style="background:var(--mac)"></i>macbook</span>
-  <span><i style="background:var(--pixel)"></i>pixel</span>
-  <span><i style="background:var(--both)"></i>both</span>
-</div>
-
+<div class="legend" id="legend"></div>
 <div id="error"></div>
-<div id="axis"></div>
+
+<div id="axis" class="cols"><div></div><div class="scale" id="scale"></div><div></div></div>
 <div id="days"></div>
+<div id="tip"></div>
 
 <script>
 "use strict";
 
 const $ = id => document.getElementById(id);
-const el = (tag, cls) => { const e = document.createElement(tag); e.className = cls; return e; };
+const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 const pad = n => String(n).padStart(2, "0");
 
-// ---- local-time date plumbing --------------------------------------------
-// Everything renders in the BROWSER's timezone. The server stores and
-// returns instants with offsets (ADR-0004), so parsing is exact; day rows
-// are local midnight to local midnight, which also makes DST days honestly
-// 23h or 25h wide.
+const BRIDGE_MS = 15 * 60 * 1000;      // display-only session bridging
+const NIGHT = [[0, 7], [22, 24]];      // shaded hours
+const PALETTE = { macbook: "var(--mac)", pixel: "var(--pixel)" };
+const EXTRA = ["var(--x1)", "var(--x2)"];
+
+// ---- local-time date plumbing (browser timezone, DST-honest) ---------------
 
 const fmtDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-// noon avoids any DST-midnight edge when stepping calendar days
 const addDays = (dateStr, n) => {
-  const d = new Date(dateStr + "T12:00:00");
+  const d = new Date(dateStr + "T12:00:00"); // noon dodges DST-midnight edges
   d.setDate(d.getDate() + n);
   return fmtDate(d);
 };
 const offsetAt = d => {
-  const m = -d.getTimezoneOffset();
-  const a = Math.abs(m);
+  const m = -d.getTimezoneOffset(), a = Math.abs(m);
   return `${m < 0 ? "-" : "+"}${pad(Math.floor(a / 60))}:${pad(a % 60)}`;
 };
-// RFC 3339 local midnight, with the offset in effect on that date
-const localMidnightRfc = dateStr => {
-  const d = new Date(dateStr + "T00:00:00");
-  return `${dateStr}T00:00:00${offsetAt(d)}`;
-};
+const localMidnightRfc = dateStr =>
+  `${dateStr}T00:00:00${offsetAt(new Date(dateStr + "T00:00:00"))}`;
 const hm = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtDur = ms => {
   const m = Math.round(ms / 60000);
   return m >= 60 ? `${Math.floor(m / 60)}h ${pad(m % 60)}m` : `${m}m`;
 };
 
-// ---- rendering -------------------------------------------------------------
+// ---- rendering --------------------------------------------------------------
 
-const classify = sources =>
-  sources.length > 1 ? "both"
-  : sources[0] === "macbook" ? "mac"
-  : sources[0] === "pixel" ? "pixel"
-  : "other"; // future devices: violet, exact names in the tooltip
+const colorOf = (source, known) =>
+  PALETTE[source] ?? EXTRA[Math.max(0, known.indexOf(source)) % EXTRA.length];
+
+function renderLegend(sources) {
+  const lg = $("legend");
+  lg.innerHTML = "";
+  const chip = (color, name) => {
+    const s = el("span");
+    s.innerHTML = `<i style="background:${color}"></i>${name}`;
+    lg.appendChild(s);
+  };
+  chip("var(--awake)", "awake (any source)");
+  for (const src of sources) chip(colorOf(src, sources), src);
+}
+
+// merge sorted [s,e] pairs whose gaps are < bridge
+function envelopes(spans, bridge) {
+  const out = [];
+  for (const [s, e] of spans) {
+    const last = out[out.length - 1];
+    if (last && s - last[1] <= bridge) last[1] = Math.max(last[1], e);
+    else out.push([s, e]);
+  }
+  return out;
+}
+
+function seg(lane, s, e, dayStart, dayMs, color, tipText) {
+  const d = el("div", "seg");
+  d.style.left = ((s - dayStart) / dayMs * 100) + "%";
+  d.style.width = ((e - s) / dayMs * 100) + "%";
+  d.style.background = color;
+  d.dataset.tip = tipText;
+  lane.appendChild(d);
+}
 
 function render(fromDate, toDate, intervals) {
   const days = $("days");
@@ -139,43 +252,156 @@ function render(fromDate, toDate, intervals) {
     e: new Date(iv.end).getTime(),
     sources: iv.sources,
   }));
+  const sources = [...new Set(ivs.flatMap(iv => iv.sources))].sort();
+  renderLegend(sources);
+
+  // The awake lane doesn't care about sources, but consolidate=true splits
+  // wherever the source set changes - abutting splits render as seams.
+  // Glue anything within 1s back together.
+  const spans = ivs.map(iv => [iv.s, iv.e]).sort((a, b) => a[0] - b[0]);
+  const awake = envelopes(spans, 1000);
+
+  // Interior gaps >= 3h are (probably) sleep - annotate them in the void.
+  const GAP_MIN = 3 * 60 * 60 * 1000;
+  const downs = [];
+  for (let i = 1; i < awake.length; i++) {
+    const gs = awake[i - 1][1], ge = awake[i][0];
+    if (ge - gs >= GAP_MIN) downs.push([gs, ge]);
+  }
+
+  const now = Date.now();
+  let grandTotal = 0, dayCount = 0, idx = 0;
 
   for (let day = fromDate; day <= toDate; day = addDays(day, 1)) {
     const dayStart = new Date(day + "T00:00:00").getTime();
     const dayEnd = new Date(addDays(day, 1) + "T00:00:00").getTime();
     const dayMs = dayEnd - dayStart;
+    dayCount++;
 
-    const row = el("div", "day");
+    const row = el("div", "day cols");
+    row.style.setProperty("--i", idx++);
+
     const label = el("div", "label");
     const dow = new Date(dayStart).toLocaleDateString(undefined, { weekday: "short" });
-    label.innerHTML = `${dow} <b>${day}</b>`;
+    const isToday = dayStart <= now && now < dayEnd;
+    label.innerHTML =
+      `<div class="dow">${dow}</div><div class="date${isToday ? " today" : ""}">${day.slice(5)}</div>`;
+    label.title = day;
 
-    const track = el("div", "track");
+    const lanes = el("div", "lanes");
+    for (const [h0, h1] of NIGHT) {
+      const n = el("div", "night");
+      n.style.left = (h0 / 24 * 100) + "%";
+      n.style.width = ((h1 - h0) / 24 * 100) + "%";
+      lanes.appendChild(n);
+    }
+
+    // awake union lane: envelope underneath, exact segments on top
+    const union = el("div", "lane");
+    const clipped = [];
     let total = 0;
-    for (const iv of ivs) {
-      if (iv.e < dayStart || iv.s >= dayEnd) continue;
-      const s = Math.max(iv.s, dayStart);
-      const e = Math.min(iv.e, dayEnd);
-      const seg = el("div", "seg " + classify(iv.sources));
-      seg.style.left = ((s - dayStart) / dayMs * 100) + "%";
-      seg.style.width = ((e - s) / dayMs * 100) + "%"; // min-width keeps slivers visible
-      seg.title = `${hm(s)}-${hm(e)}  ${iv.sources.join(" + ")}`;
-      track.appendChild(seg);
+    for (const [as, ae] of awake) {
+      if (ae < dayStart || as >= dayEnd) continue;
+      const s = Math.max(as, dayStart), e = Math.min(ae, dayEnd);
+      clipped.push([s, e]);
       total += e - s;
+    }
+    for (const [s, e] of envelopes(clipped.map(p => p.slice()), BRIDGE_MS)) {
+      const env = el("div", "env");
+      env.style.left = ((s - dayStart) / dayMs * 100) + "%";
+      env.style.width = ((e - s) / dayMs * 100) + "%";
+      union.appendChild(env);
+    }
+    for (const [s, e] of clipped) {
+      seg(union, s, e, dayStart, dayMs, "var(--awake)",
+          `${hm(s)}–${hm(e)} · ${fmtDur(e - s)}|awake`);
+    }
+    for (const [gs, ge] of downs) {
+      if (ge <= dayStart || gs >= dayEnd) continue;
+      const s = Math.max(gs, dayStart), e = Math.min(ge, dayEnd);
+      if ((e - s) / dayMs < 0.07) continue; // too narrow for a label
+      const g = el("div", "gaplabel");
+      g.textContent = `☾ ${fmtDur(ge - gs)}`;
+      g.dataset.tip = `${hm(gs)} → ${hm(ge)}|down`;
+      g.style.left = (((s + e) / 2 - dayStart) / dayMs * 100) + "%";
+      union.appendChild(g);
+    }
+    lanes.appendChild(union);
+
+    // one thin attribution strip per source
+    const bySource = {};
+    for (const src of sources) {
+      const strip = el("div", "strip");
+      let sum = 0;
+      for (const iv of ivs) {
+        if (!iv.sources.includes(src) || iv.e < dayStart || iv.s >= dayEnd) continue;
+        const s = Math.max(iv.s, dayStart), e = Math.min(iv.e, dayEnd);
+        sum += e - s;
+        seg(strip, s, e, dayStart, dayMs, colorOf(src, sources),
+            `${hm(s)}–${hm(e)} · ${fmtDur(e - s)}|${src}`);
+      }
+      bySource[src] = sum;
+      lanes.appendChild(strip);
+    }
+
+    if (isToday) {
+      const nl = el("div", "nowline");
+      nl.style.left = ((now - dayStart) / dayMs * 100) + "%";
+      lanes.appendChild(nl);
     }
 
     const totalDiv = el("div", "total");
-    totalDiv.textContent = total ? fmtDur(total) : "";
-    row.append(label, track, totalDiv);
+    if (total) {
+      const by = sources.filter(s => bySource[s])
+        .map(s => `${s.slice(0, 3)} ${fmtDur(bySource[s])}`).join("<br>");
+      totalDiv.innerHTML = `<b>${fmtDur(total)}</b><span class="by">${by}</span>`;
+    } else {
+      totalDiv.innerHTML = `<b style="color:var(--faint)">—</b>`;
+    }
+    grandTotal += total;
+
+    row.append(label, lanes, totalDiv);
     days.appendChild(row);
   }
+
+  $("rangeStat").innerHTML =
+    `${dayCount} day${dayCount > 1 ? "s" : ""} · awake <b>${fmtDur(grandTotal)}</b>`;
 }
 
-// ---- data loading ----------------------------------------------------------
+// ---- tooltip ----------------------------------------------------------------
+
+const tip = $("tip");
+const cross = el("div", "cross"), crossTime = el("div", "crosstime");
+document.addEventListener("mousemove", e => {
+  const s = e.target.closest?.("[data-tip]");
+  if (s) {
+    const [time, src] = s.dataset.tip.split("|");
+    tip.innerHTML = `${time} <span class="src">${src}</span>`;
+    tip.style.display = "block";
+    const r = tip.getBoundingClientRect();
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - r.width - 8) + "px";
+    tip.style.top = Math.max(8, e.clientY - r.height - 12) + "px";
+  } else {
+    tip.style.display = "none";
+  }
+
+  // crosshair time readout anywhere on a track (hour-fraction of the row
+  // width - close enough even on 23/25h DST days)
+  const lanes = e.target.closest?.(".lanes");
+  if (!lanes) { cross.remove(); crossTime.remove(); return; }
+  const r = lanes.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const mins = Math.round(frac * 24 * 60);
+  cross.style.left = (frac * 100) + "%";
+  crossTime.style.left = (Math.min(.97, Math.max(.03, frac)) * 100) + "%";
+  crossTime.textContent = `${pad(Math.floor(mins / 60) % 24)}:${pad(mins % 60)}`;
+  lanes.append(cross, crossTime);
+});
+
+// ---- data loading -------------------------------------------------------------
 
 async function load() {
-  const fromDate = $("from").value;
-  const toDate = $("to").value;
+  const fromDate = $("from").value, toDate = $("to").value;
   const err = $("error");
   err.style.display = "none";
   if (!fromDate || !toDate) return;
@@ -184,18 +410,15 @@ async function load() {
     err.style.display = "block";
     return;
   }
-  // half-open [from 00:00, day-after-to 00:00), local offsets; the page is
-  // served by the backend itself, so this is a same-origin request
   const qs = new URLSearchParams({
     from: localMidnightRfc(fromDate),
-    to: localMidnightRfc(addDays(toDate, 1)),
+    to: localMidnightRfc(addDays(toDate, 1)),   // half-open [from, to+1d)
     consolidate: "true",
   });
   try {
     const res = await fetch("/v1/intervals?" + qs);
     if (!res.ok) throw new Error(`server returned ${res.status}: ${await res.text()}`);
-    const body = await res.json();
-    render(fromDate, toDate, body.intervals);
+    render(fromDate, toDate, (await res.json()).intervals);
   } catch (e) {
     $("days").innerHTML = "";
     err.textContent = "failed to load: " + e.message;
@@ -203,31 +426,37 @@ async function load() {
   }
 }
 
-// ---- wiring ----------------------------------------------------------------
+// ---- wiring -------------------------------------------------------------------
 
 for (let h = 0; h <= 24; h += 3) {
   const s = document.createElement("span");
   s.textContent = pad(h);
   s.style.left = (h / 24 * 100) + "%";
-  $("axis").appendChild(s);
+  $("scale").appendChild(s);
 }
 
+const setRange = (from, to) => { $("from").value = from; $("to").value = to; load(); };
+const markActive = b => {
+  document.querySelectorAll(".controls button").forEach(x => x.classList.remove("active"));
+  if (b) b.classList.add("active");
+};
 for (const b of document.querySelectorAll("button[data-days]")) {
   b.addEventListener("click", () => {
-    const n = Number(b.dataset.days);
     const today = fmtDate(new Date());
-    $("to").value = today;
-    $("from").value = addDays(today, -(n - 1));
-    load();
+    setRange(addDays(today, -(Number(b.dataset.days) - 1)), today);
+    markActive(b);
   });
 }
-$("from").addEventListener("change", load);
-$("to").addEventListener("change", load);
+document.querySelector("button[data-yesterday]").addEventListener("click", e => {
+  const y = addDays(fmtDate(new Date()), -1);
+  setRange(y, y);
+  markActive(e.target);
+});
+$("from").addEventListener("change", () => { markActive(null); load(); });
+$("to").addEventListener("change", () => { markActive(null); load(); });
 
-// default view: today
-$("to").value = fmtDate(new Date());
-$("from").value = $("to").value;
-load();
+setRange(fmtDate(new Date()), fmtDate(new Date()));
+markActive(document.querySelector("button[data-days='1']"));
 </script>
 </body>
 </html>

@@ -153,11 +153,16 @@ set.
 GET / -> 200 text/html
 ```
 
-The timeline visualization (added 2026-07-11): a single self-contained
-page embedded in the server binary. Date pickers with today / last week
-/ last month presets; one 24h row per local-time day; colored segments
-from `consolidate=true` (macbook / pixel / both), per-day active
-totals, hover tooltips. Served same-origin so no CORS surface exists.
+The timeline visualization (added 2026-07-11, redesigned same day): a
+single self-contained page embedded in the server binary, fed by
+`consolidate=true`. Date pickers with today / yesterday / 7d / 30d
+presets; one 24h row per local-time day, each an "awake" union lane
+(dim session envelope bridges gaps < 15 min; abutting source-set
+splits merged before rendering) above thin per-source attribution
+strips. Interior gaps >= 3h are annotated as probable sleep; night
+hours (22-07) shaded; "now" marked on today; crosshair time readout
+and hover tooltips. All bridging/annotation is display-only - the API
+returns exact intervals. Served same-origin so no CORS surface exists.
 
 ```
 GET /healthz -> 200 "ok"

@@ -455,7 +455,7 @@ async fn root_serves_the_timeline_page() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         body.as_str()
-            .is_some_and(|html| html.contains("<title>are-you-up timeline</title>")),
+            .is_some_and(|html| html.contains("<title>are-you-up · timeline</title>")),
         "body: {body}"
     );
 }
