@@ -108,7 +108,10 @@ class SampleJob : JobService() {
             val outcome = Syncer(prefs.serverUrl, prefs.source).sync(store)
             val summary = when (outcome) {
                 is Syncer.Outcome.Ok -> {
-                    prefs.lastSyncTs = Timestamps.format(now)
+                    // Only when rows actually reached the server: an
+                    // empty-queue Ok(0) says nothing about reachability,
+                    // and "last successful sync" reads as a health signal.
+                    if (outcome.synced > 0) prefs.lastSyncTs = Timestamps.format(now)
                     store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
                     "${Timestamps.format(now)}: ${events.size} events, " +
                         "$samplesNote, synced ${outcome.synced}"
