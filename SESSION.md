@@ -46,3 +46,9 @@
   but a `Uri.parse` sanity check would fail at the moment of the typo
   instead). The EditText also keeps the un-normalized text the user
   typed while the stored value is trimmed - cosmetic mismatch.
+- Server db was wiped by the 2026-07-11 morning redeploy (earliest data
+  now 08:11:41 that day, both sources; July 9-10 was queryable the day
+  before). Deployment method likely bypasses the systemd StateDirectory
+  (/var/lib/are-you-up/). Lost days still sit in the mac/pixel client
+  dbs marked synced (7-day prune) - recoverable by flipping synced=0 if
+  wanted, but fix the deploy path first or it happens every redeploy.
