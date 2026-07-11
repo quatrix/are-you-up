@@ -4,14 +4,61 @@ Tracks keyboard/mouse activity on my devices and serves it as
 active/idle intervals, as a correction signal for whoop's time-in-bed
 detection (sofa laptop sessions are not bed time).
 
-- `mac/` - Swift menu-bar client: samples seconds-since-last-input every
-  30s into local sqlite, syncs batches to the backend every 60s.
-- `backend/` - Rust REST server: stores raw samples, derives intervals
-  at query time (`threshold_s` is a query parameter, tunable forever).
-- `android/` - later.
+## How it works
 
-Design: `docs/superpowers/specs/2026-07-10-are-you-up-design.md`.
-Decisions: `DECISIONS.md`. Findings: `LAB_NOTES.md`.
+```
+mac menu-bar app                 rust server                 whoop tooling
+ samples idle_s every 30s  --->  stores raw samples    --->  GET /v1/intervals
+ buffers in local sqlite   POST  (sqlite, verbatim)          active/idle ranges
+ syncs batches every 60s         derives at query time
+```
 
-Timestamps are RFC 3339 with local offset everywhere. Communication is
-plain HTTP over tailscale; there is no auth (single-user tailnet).
+- The client reads seconds-since-last-input via `CGEventSource` (no
+  permissions needed), buffers samples in local sqlite, and syncs in
+  batches. Unsynced data survives server outages, crashes, and reboots;
+  the server upserts on `(source, ts)` so retries are harmless.
+- The server stores raw samples and classifies active/idle at query
+  time: `threshold_s` (default 900, i.e. 15 minutes without input) is a
+  query parameter, so the threshold stays tunable against whoop data
+  forever without touching stored data or redeploying clients.
+- Gaps in samples (lid closed, machine off, client paused) are simply
+  absent from results: no signal, not "idle".
+- Timestamps are RFC 3339 with the device's local UTC offset,
+  everywhere. Transport is plain HTTP over a private tailnet; there is
+  deliberately no auth.
+
+## Quickstart
+
+Server (any box on the tailnet):
+
+    cd backend && make run          # ARE_YOU_UP_ADDR / ARE_YOU_UP_DB to override defaults
+
+Client (this mac):
+
+    cd mac && make install          # release build + LaunchAgent, starts at login
+    # then point it at the server:
+    #   ~/Library/Application Support/are-you-up/config.json -> "server_url"
+
+Query (note: percent-encode `+` in timestamps as `%2B`):
+
+    curl "http://<server>:8080/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-11T08:00:00%2B03:00"
+
+Full API reference: `backend/README.md`. Client paths, menu, and env
+vars: `mac/README.md`.
+
+## Layout
+
+- `backend/` - Rust REST server (axum + rusqlite)
+- `mac/` - Swift menu-bar client (SwiftPM, zero third-party deps)
+- `android/` - later
+- `docs/superpowers/specs/` - approved design; `docs/superpowers/plans/` - implementation plans
+- `DECISIONS.md` - architecture decision records; `LAB_NOTES.md` - empirical findings; `SESSION.md` - known limitations and deferred work
+
+## Development
+
+Each part has a Makefile with `build`, `run`, and `test`:
+
+    make -C backend test            # 19 tests: unit (derivation) + integration (API)
+    make -C mac test                # 24 tests: store, syncer, config, log, timestamps
+    make -C backend smoke           # E2E: real server process, asserted intervals
+    scripts/e2e.sh                  # joint E2E: real client syncing to real server

@@ -15,7 +15,7 @@ sqlite and syncs to the backend every 60s. See
 
 ## Run / install
 
-    swift run are-you-up      # foreground run
+    make run                  # foreground run (swift run are-you-up)
     make install              # release build + LaunchAgent (starts at login)
     make uninstall
 
@@ -28,4 +28,4 @@ stops sampling entirely; paused time uploads nothing.
 
 ## Test
 
-    swift test
+    make test

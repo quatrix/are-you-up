@@ -2,10 +2,13 @@ PREFIX ?= $(HOME)/.local
 BIN = $(PREFIX)/bin/are-you-up
 PLIST = $(HOME)/Library/LaunchAgents/com.are-you-up.mac.plist
 
-.PHONY: build test install uninstall
+.PHONY: build run test install uninstall
 
 build:
 	swift build -c release
+
+run:
+	swift run are-you-up
 
 test:
 	swift test

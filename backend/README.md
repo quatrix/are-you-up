@@ -5,10 +5,11 @@ active/idle intervals. See `../docs/superpowers/specs/` for the design.
 
 ## Run
 
-    ARE_YOU_UP_ADDR=127.0.0.1:8080 ARE_YOU_UP_DB=./are-you-up.db cargo run
+    make run                  # or: cargo run
+    ARE_YOU_UP_ADDR=127.0.0.1:8080 ARE_YOU_UP_DB=./are-you-up.db make run
 
 Both env vars are optional; the values above are the defaults. Deploy by
-binding the tailnet address.
+binding the tailnet address. `make build` produces a release binary.
 
 ## API
 
@@ -26,5 +27,6 @@ binding the tailnet address.
 
 ## Test
 
-    cargo test            # unit + integration
-    scripts/smoke.sh      # E2E against a real server process (Task 6)
+    make test             # unit + integration (cargo test)
+    make smoke            # E2E against a real server process
+    ../scripts/e2e.sh     # joint E2E: real mac client syncing to this server
