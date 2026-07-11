@@ -11,7 +11,8 @@ source of truth for the API contract between the parts.
   touching it.
 - `mac/` - Swift menu-bar client. Read `mac/CLAUDE.md` before touching
   it.
-- `android/` - not started.
+- `android/` - Kotlin phone client. Read `android/CLAUDE.md` before
+  touching it.
 
 ## Cross-cutting rules
 
@@ -32,5 +33,6 @@ source of truth for the API contract between the parts.
 
     make -C backend test        # 19 tests
     make -C mac test            # 24 tests
+    make -C android test        # JVM unit tests, no device needed
     make -C backend smoke       # E2E against a real server process
     scripts/e2e.sh              # joint E2E: real client -> real server

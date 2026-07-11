@@ -50,7 +50,7 @@ vars: `mac/README.md`.
 
 - `backend/` - Rust REST server (axum + rusqlite)
 - `mac/` - Swift menu-bar client (SwiftPM, zero third-party deps)
-- `android/` - later
+- `android/` - Kotlin phone client (no resident process; 15-min job replays system usage events)
 - `docs/superpowers/specs/` - approved design; `docs/superpowers/plans/` - implementation plans
 - `DECISIONS.md` - architecture decision records; `LAB_NOTES.md` - empirical findings; `SESSION.md` - known limitations and deferred work
 
@@ -60,5 +60,6 @@ Each part has a Makefile with `build`, `run`, and `test`:
 
     make -C backend test            # 19 tests: unit (derivation) + integration (API)
     make -C mac test                # 24 tests: store, syncer, config, log, timestamps
+    make -C android test            # JVM unit tests: synthesizer, store, syncer, timestamps
     make -C backend smoke           # E2E: real server process, asserted intervals
     scripts/e2e.sh                  # joint E2E: real client syncing to real server
