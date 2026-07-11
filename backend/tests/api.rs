@@ -408,6 +408,27 @@ async fn consolidate_rejects_anything_but_true_or_false() {
 }
 
 #[tokio::test]
+async fn consolidate_rejects_empty_value() {
+    // "consolidate=" deserializes as Some(""), not None: it must hit the
+    // strict-validation arm, not silently mean false
+    let app = test_app();
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00&consolidate=",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("consolidate")),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
 async fn consolidate_composes_with_source_filter() {
     let app = test_app();
     seed_two_source_overlap(&app).await;

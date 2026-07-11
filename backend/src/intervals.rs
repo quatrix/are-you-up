@@ -556,6 +556,40 @@ mod tests {
     }
 
     #[test]
+    fn consolidate_zero_length_at_anothers_boundary_is_absorbed_without_attribution() {
+        // Pins the documented blind spot (see the consolidate doc comment):
+        // a zero-length interval coinciding with another source's boundary
+        // instant stays covered but unattributed. If a refactor changes
+        // this in either direction, this test must be revisited on purpose.
+        let got = consolidate(&[
+            src(
+                "macbook",
+                vec![iv(
+                    "2026-07-10T22:00:00+03:00",
+                    "2026-07-10T22:10:00+03:00",
+                    State::Active,
+                )],
+            ),
+            src(
+                "pixel",
+                vec![iv(
+                    "2026-07-10T22:10:00+03:00",
+                    "2026-07-10T22:10:00+03:00",
+                    State::Active,
+                )],
+            ),
+        ]);
+        assert_eq!(
+            got,
+            vec![civ(
+                "2026-07-10T22:00:00+03:00",
+                "2026-07-10T22:10:00+03:00",
+                &["macbook"]
+            )]
+        );
+    }
+
+    #[test]
     fn consolidate_mixed_offsets_compare_as_instants() {
         // 19:00Z and 22:00+03:00 are the same instant: one merged piece
         let got = consolidate(&[

@@ -136,8 +136,10 @@ idle is not evidence of anything and is simply not emitted (there is no
 Consolidation runs after per-source derivation: the per-source active
 intervals are unioned on the timeline and split wherever the set of
 active sources changes, so `sources` (sorted) is exact for every
-interval. Interval boundary timestamps are reused verbatim from the
-underlying per-source intervals (ADR-0004: never re-formatted). Time
+interval. Interval boundaries keep the instant and UTC
+offset of the underlying per-source samples, re-rendered as RFC 3339 -
+the same treatment as the raw view (ADR-0004's verbatim rule governs
+storage, which is untouched). Time
 covered by no active interval is absent, as always. `threshold_s` and
 `source` compose with `consolidate` unchanged: the threshold decides
 per-source activeness before merging, and `source` narrows the input

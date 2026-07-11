@@ -48,5 +48,9 @@ timestamps, 0005 toolchain pin).
   and ~100-150MB transient RSS at 1M rows (LAB_NOTES.md 2026-07-10).
   Upgrade path: epoch column + index. Do not "optimize" past this
   without reading that entry.
+- `consolidate=true` adds a sweep that is O(n^2) in the count of active
+  intervals: measured 233ms at 8k actives, sub-ms at day scale
+  (LAB_NOTES.md 2026-07-11). Irrelevant until someone consolidates
+  year-wide ranges on top of the full scan above.
 - No schema migrations (`CREATE TABLE IF NOT EXISTS` only); see
   `../SESSION.md`.

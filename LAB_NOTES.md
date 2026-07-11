@@ -431,3 +431,40 @@ Conclusion: the offline-buffer -> ack-verified sync -> query-time
 derivation pipeline works end to end against a real deployment, and the
 captive-portal-style failure mode (bare non-ack responses) demonstrably
 loses no data.
+
+## 2026-07-11 - Review probe of intervals::consolidate: adversarial sweep cases, handler edges, quadratic scaling
+
+Reviewed 11430cc (consolidate=true) against the spec block from fb9f776.
+Wrote a temporary `backend/tests/scratch_probe.rs` (15 tests, deleted
+after the run; all passed) covering cases the committed tests skip:
+
+- Sweep correctness held on every adversarial input: three-source
+  telescoping (A superset of B superset of C -> 5 pieces with exact sets),
+  nested intervals sharing a start or an end bound, two zero-length
+  intervals at the same instant from different sources (one point piece,
+  sorted `["a","b"]`), an isolated zero-length instant separated from
+  other coverage (survives as its own point piece), and a zero-length
+  instant coinciding with another interval's start, end, or a
+  covered-covered boundary (absorbed; its source name dropped - exactly
+  the blind spot the doc comment declares).
+- Handler edges: `consolidate=` (empty), bare `consolidate`,
+  `consolidate=TRUE`, and duplicate `consolidate=true&consolidate=true`
+  all return uniform JSON 400s (serde deserializes the first two as
+  `Some("")`, caught by the strict tri-state match; the duplicate key is
+  rejected by the QueryRejection arm). No probed client input can 500.
+- "Verbatim" nuance: samples posted with `Z` come back as `+00:00` -
+  `to_rfc3339()` re-renders rather than echoing bytes. Same instant and
+  offset, and identical to pre-existing raw-mode behavior (ADR-0004's
+  verbatim requirement is about storage, which is TEXT-verbatim), but the
+  spec sentence "reused verbatim ... never re-formatted" overstates it.
+- Scaling: consolidate is O(n^2) in active-interval count -
+  `sources_covering` is O(n) and runs ~3x per bound over 2n bounds.
+  Measured (release build, alternating two-source non-mergeable input):
+  1k actives 15ms, 2k 36ms, 4k 69ms, 8k 233ms - a clean ~4x per doubling.
+  A realistic whoop-correction query (a night/day window, tens of
+  actives) is sub-millisecond; only a multi-month/year-wide
+  consolidate=true query reaches seconds (~20k actives extrapolates to
+  ~1.5s), on top of the documented full-scan cost, and the db mutex is
+  already released by then. Concluded: no practical concern at this
+  product's scale, but it is a second, undocumented ceiling alongside the
+  full-scan one in backend/CLAUDE.md's "Known ceilings".
