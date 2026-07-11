@@ -14,6 +14,15 @@ Every option resolves as: flag, then env var (`ARE_YOU_UP_ADDR`,
 Deploy by binding the tailnet address. `make build` produces a release
 binary.
 
+Logging goes to stdout via `tracing`; `RUST_LOG` controls verbosity
+(default `info`):
+
+    RUST_LOG=debug make run       # per-request traces, handler events, 4xx reasons
+    RUST_LOG=are_you_up_backend=debug,tower_http=info make run
+
+Server faults (5xx) always log at `error`; client mistakes (4xx) only
+appear at `debug`.
+
 ## API
 
     POST /v1/samples

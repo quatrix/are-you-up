@@ -1,5 +1,6 @@
 use are_you_up_backend::{app, open_db};
 use clap::Parser;
+use tracing_subscriber::EnvFilter;
 
 /// Stores raw activity samples and serves derived active/idle intervals.
 ///
@@ -8,6 +9,9 @@ use clap::Parser;
 /// setups that export ARE_YOU_UP_* keep working unchanged).
 #[derive(Parser, Debug)]
 #[command(version, about)]
+#[command(after_help = "Logging: RUST_LOG controls verbosity (default: info). \
+Examples: RUST_LOG=debug for everything including per-request traces, \
+RUST_LOG=are_you_up_backend=debug,tower_http=info for finer control.")]
 struct Args {
     /// Address to bind (host:port); use the tailnet address in deployment
     #[arg(long, env = "ARE_YOU_UP_ADDR", default_value = "127.0.0.1:8080")]
@@ -21,11 +25,16 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
     let conn = open_db(&args.db);
     let listener = tokio::net::TcpListener::bind(&args.addr)
         .await
         .expect("bind --addr; the address must be free and well-formed");
-    println!("listening on {}, database at {}", args.addr, args.db);
+    tracing::info!(addr = %args.addr, db = %args.db, "listening");
     axum::serve(listener, app(conn))
         .await
         .expect("serve fails only on unrecoverable accept errors");

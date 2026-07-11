@@ -10,6 +10,8 @@ use axum::{Json, Router};
 use chrono::DateTime;
 use rusqlite::Connection;
 use serde::Deserialize;
+use tower_http::trace::TraceLayer;
+use tracing::{debug, error, warn};
 
 pub mod intervals;
 
@@ -42,6 +44,7 @@ pub fn open_db(path: &str) -> Connection {
         [],
     )
     .expect("create samples table");
+    debug!(path, journal_mode = mode, "database open");
     conn
 }
 
@@ -58,6 +61,9 @@ pub fn app(conn: Connection) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/samples", post(post_samples))
         .route("/v1/intervals", get(get_intervals))
+        // Per-request logging (method, path, status, latency) at debug level;
+        // enable with RUST_LOG=debug or RUST_LOG=tower_http=debug.
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
@@ -67,6 +73,13 @@ pub fn app(conn: Connection) -> Router {
 /// axum's body extractors reject a non-UTF-8 body with a plain-text 400 and
 /// an oversize body with a plain-text 413, before our handlers run.
 fn error_response(status: StatusCode, message: String) -> Response {
+    // Central log point for every non-2xx we produce: server faults are
+    // always visible, client mistakes only under RUST_LOG=debug.
+    if status.is_server_error() {
+        error!(%status, message, "request failed");
+    } else {
+        debug!(%status, message, "request rejected");
+    }
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
@@ -131,6 +144,7 @@ async fn post_samples(State(state): State<AppState>, body: String) -> Response {
     if let Err(e) = tx.commit() {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}"));
     }
+    debug!(source = %req.source, accepted = req.samples.len(), "stored samples batch");
     Json(serde_json::json!({ "accepted": req.samples.len() })).into_response()
 }
 
@@ -225,8 +239,9 @@ async fn get_intervals(
             .push(intervals::Sample { t, idle_s });
     }
     if skipped_unparseable_ts > 0 {
-        eprintln!(
-            "warning: skipped {skipped_unparseable_ts} rows with unparseable ts in /v1/intervals"
+        warn!(
+            skipped = skipped_unparseable_ts,
+            "skipped rows with unparseable ts in /v1/intervals"
         );
     }
 
@@ -245,5 +260,13 @@ async fn get_intervals(
             }));
         }
     }
+    debug!(
+        from = %from,
+        to = %to,
+        threshold_s,
+        source = q.source.as_deref().unwrap_or("<all>"),
+        intervals = out.len(),
+        "derived intervals"
+    );
     Json(serde_json::json!({ "intervals": out })).into_response()
 }

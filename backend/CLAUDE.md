@@ -9,6 +9,10 @@ timestamps, 0005 toolchain pin).
 
 - `make build` / `make run` / `make test` / `make smoke` (E2E against a
   real server process)
+- Logging: `tracing` with `RUST_LOG` (default `info`). All non-2xx
+  responses log centrally in `error_response` (5xx at error, 4xx at
+  debug); per-request traces come from tower-http's `TraceLayer`. Route
+  new log lines through those conventions, not println/eprintln.
 - The toolchain is pinned by `rust-toolchain.toml` (1.96.1): older
   toolchains cannot compile `libsqlite3-sys 0.38`'s build script
   (ADR-0005). Do not remove the pin without checking that.
