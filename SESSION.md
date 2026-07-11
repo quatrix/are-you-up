@@ -21,3 +21,11 @@
   server's `{"accepted": N}` ack before marking anything synced), but the
   default port is worth changing when the real deployment address is
   chosen.
+- `Synthesizer.synthesize` with `nowMs < cursor.tsMs` (wall clock stepped
+  backward between job runs - NTP/carrier time correction) emits one
+  spurious active sample at the past `nowMs` when the cursor is
+  interactive, and regresses the cursor. Bounded and self-healing
+  (level-based events make the overlap replay idempotent; dedupe absorbs
+  re-emitted rows), but Task 7's SampleJob should clamp
+  `now = max(now, cursor.tsMs)` - or skip the run - when the clock has
+  regressed. See LAB_NOTES.md 2026-07-11 Task 4 probe entry.

@@ -189,3 +189,48 @@ twin needs the pin and the android one doesn't. Also verified both
 test epoch constants map to their claimed UTC instants
 (1783764000000 = 2026-07-11T10:00:00Z, 1768471200000 =
 2026-01-15T10:00:00Z) via Python `datetime`.
+
+## 2026-07-11 - Synthesizer degenerate-input probes (android Task 4 quality review)
+
+Probed `Synthesizer.synthesize` with inputs outside its documented
+contract via a temporary JUnit file (removed after the run), plus
+verified every cross-reference its comments make. Findings:
+
+- **Clock skew (`nowMs` < `cursor.tsMs`), interactive cursor**: emits
+  exactly one sample at the past `nowMs` and returns a cursor regressed
+  to `nowMs` (probe: `samples=[-60000]` for now = cursor - 60s). The
+  regression is self-healing: events are level-based (each sets a bit
+  absolutely), so the next run's re-replay of the overlap re-derives
+  identical windows and `INSERT OR IGNORE` dedupes the re-emitted rows.
+  The lone spurious sample is only wrong if the clock jumped back past
+  the open window's start. Non-interactive cursor: no samples, cursor
+  regresses, harmless. Noted in SESSION.md for Task 7 to clamp.
+- **Event exactly at `nowMs`**: processed (filter is `> nowMs`), closes
+  the window at `nowMs` with correct state bits carried into the cursor
+  (`screenOn=true, unlocked=false` after a LOCKED-at-now). Correct per
+  the `(cursor, now]` contract, though no committed test pins the
+  inclusive end.
+- **Unsorted input** (contract violation - close event listed before
+  opens): `emitGrid(start > end)`'s `while (t < endMs)` never runs, so
+  it emits the single end sample and terminates - bounded degradation,
+  no exception, no runaway allocation.
+- **Rerun at the same `now`** (open window): second run emits exactly
+  `[now]`, the same millisecond as the first run's final sample, so the
+  ts strings are identical and local/server dedupe absorbs it -
+  idempotent, confirming the header comment's boundary-duplicate claim.
+  Second-granularity ts collisions are generally harmless here: every
+  sample this source emits is `idle_s=0`, so colliding rows are always
+  identical.
+- **Comment cross-references all verified**: 90s merge gap =
+  `backend/src/intervals.rs:6` (`MAX_GAP_S: i64 = 90`), server upsert =
+  `backend/src/lib.rs:138` (`ON CONFLICT (source, ts) DO UPDATE`),
+  local `INSERT OR IGNORE` matches the spec's Store section (forward
+  reference; Task 5 not yet built).
+- **Scale math**: a 10h open window emits 1201 boxed longs (~30KB); a
+  pathological 7-day fully-interactive backlog ~20k (~500KB transient).
+  Memory is a non-issue at the 15-min job cadence.
+- The `windowStart = -1L` sentinel collides with valid negative
+  timestamps in principle (an event at -1 ms opening a window would be
+  treated as "no window"; one closing it would grid from -1), but is
+  unreachable: the cursor starts at install-time `now` and events <=
+  cursor are skipped, so no non-modern timestamp ever passes the filter.
