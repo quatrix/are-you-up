@@ -13,6 +13,7 @@ JDK-internal modules like com.sun.net.httpserver). Approved design:
 - `make build` / `make test` / `make install` / `make run` /
   `make log` / `make clean`
 - Force a job run: `adb shell cmd jobscheduler run -f dev.areyouup 1`
+  (sampler) / `... 2` (sync; the -f also overrides its VPN constraint)
 - The SDK path comes from `local.properties` (gitignored); see
   README.md prerequisites.
 
@@ -29,9 +30,14 @@ JDK-internal modules like com.sun.net.httpserver). Approved design:
 
 - ADR-0007: no resident process. Never add a foreground service,
   broadcast receiver, alarm, or wakelock; `SampleJob` is the only thing
-  that ever runs in the background, and the JobInfo carries no
-  constraints beyond the period (it must run offline so samples
-  buffer).
+  that ever runs in the background, as two persisted periodic jobs
+  (ADR-0009): the sampler (job 1) carries no constraints beyond the
+  period (it must run offline so samples buffer); sync (job 2) is gated
+  on a VPN network existing. Scheduling is the one piece of glue with a
+  test (`SampleJobScheduleTest`, Robolectric).
+- The two jobs and the "Sync now" button share sqlite through separate
+  `Store` connections; every db-touching entry point in `SampleJob`
+  serializes on `dbLock`. Keep that discipline.
 - The cursor (in `Prefs`) only advances after synthesis AND insertion
   succeeded; advancing it early silently loses usage forever.
 - Never mark samples synced without verifying `{"accepted": N}` equals

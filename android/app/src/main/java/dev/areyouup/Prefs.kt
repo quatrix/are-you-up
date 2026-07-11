@@ -50,6 +50,12 @@ class Prefs(context: Context) {
         get() = p.getString("last_run", "never")!!
         set(v) { p.edit().putString("last_run", v).apply() }
 
+    // The sync job reports separately from the sampler (ADR-0009): a
+    // failing upload must stay visible even while sampling is healthy.
+    var lastSyncSummary: String
+        get() = p.getString("last_sync_summary", "never")!!
+        set(v) { p.edit().putString("last_sync_summary", v).apply() }
+
     var lastSyncTs: String
         get() = p.getString("last_sync", "never")!!
         set(v) { p.edit().putString("last_sync", v).apply() }

@@ -158,3 +158,35 @@ state lives in the app (a stopwatch reset between process restarts is
 re-anchored on first tick), and a stray input event during a dark wake
 (e.g. a Bluetooth peripheral in a bag) still counts as activity - which
 is arguably correct.
+
+## 0009 - Android sync is a separate job, gated on the VPN network existing
+
+**Date:** 2026-07-11 | **Status:** accepted
+**Context:** The server only resolves through tailscale, which is mostly
+down while the phone is locked. The single 15-min job synced on its own
+clock, so uploads usually fired into the void and failed; short unlocks
+rarely overlapped a tick, so backlogs lingered for hours. No data was
+lost (samples buffer, replay is retrospective), but freshness suffered.
+**Decision:** Split into two persisted 15-min periodic jobs on the same
+`JobService`. Job 1 (sampler) stays unconstrained - it must run offline
+so samples buffer. Job 2 (sync) carries
+`setRequiredNetwork(TRANSPORT_VPN, NOT_VPN removed)`: JobScheduler
+holds it while the tunnel is down and starts it within seconds of the
+VPN appearing, so unlocking the phone *triggers* the upload instead of
+hoping to coincide with it. A shared lock serializes the two jobs'
+sqlite access (`Store` opens one connection per instance).
+`onStartJob` re-asserts the schedule, so upgraded builds converge on
+the new job set without a manual app launch.
+**Alternatives:** VPN-constraining the single job - simpler, but a long
+tailscale outage would also stop sampling, and the system's usage-event
+retention could then outlive the cursor. Retry-with-backoff on failure -
+still uncorrelated with tunnel availability, plus churn. Doing nothing
+and relying on tailscale Always-on VPN + battery-unrestricted (still
+recommended in the README) - helps, but Android can still drop the
+tunnel in doze.
+**Consequences:** Uploads land while the phone is in use, and quick
+unlocks flush the backlog. Still no resident process (ADR-0007 holds).
+Costs: if tailscale is off for days, nothing syncs until it returns
+(intended: there is no other route to the server), and the status
+screen needs two lines (sampler summary and sync summary) instead of
+one.

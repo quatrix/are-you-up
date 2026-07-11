@@ -8,6 +8,8 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
 import android.content.Context
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import dev.areyouup.core.Store
 import dev.areyouup.core.Syncer
@@ -16,48 +18,80 @@ import dev.areyouup.core.Timestamps
 import kotlin.concurrent.thread
 
 // ==========================================================================
-// The entire runtime of the app (ADR-0007)
+// The entire runtime of the app (ADR-0007, ADR-0009)
 // ==========================================================================
 //
-// A persisted 15-minute periodic job: replay system screen/keyguard
-// events from the stored cursor, synthesize samples, buffer, sync,
-// prune, exit. No other component of this app ever runs in the
-// background - do not add receivers, services, alarms, or wakelocks.
+// Two persisted 15-minute periodic jobs, both served by this JobService,
+// and nothing else ever runs in the background - do not add receivers,
+// services, alarms, or wakelocks.
+//
+// - The SAMPLER (job 1) is unconstrained: replay system screen/keyguard
+//   events from the stored cursor, synthesize samples, buffer, exit. It
+//   must run offline so samples keep accumulating.
+// - The SYNC job (job 2) is gated on a VPN network existing: the server
+//   only resolves through tailscale, so an unconstrained sync mostly
+//   fired while the tunnel was down and failed. Constraint satisfaction
+//   also works as a trigger - unlocking the phone brings tailscale up,
+//   which starts the pending sync within seconds, so even a quick
+//   check-something unlock uploads the backlog (ADR-0009).
 class SampleJob : JobService() {
 
     companion object {
         const val TAG = "are-you-up"
-        private const val JOB_ID = 1
+        private const val JOB_ID_SAMPLE = 1
+        private const val JOB_ID_SYNC = 2
         private const val PERIOD_MS = 15 * 60 * 1000L
         private const val PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000L
 
-        // No constraints beyond the period: the job must run even with no
-        // network (samples buffer; sync just fails and retries next run).
+        // Store opens one sqlite connection per instance, so concurrent
+        // sample/sync/manual runs would trip over each other's write
+        // locks. All db-touching entry points serialize here.
+        private val dbLock = Any()
+
         fun schedule(context: Context) {
             val scheduler = context.getSystemService(JobScheduler::class.java)
             // Re-scheduling an existing periodic job resets its phase, so
             // return early when the pending job already matches. But ONLY
             // then: persisted jobs survive app updates (the documented
-            // upgrade flow is git pull && make install), so a changed
-            // PERIOD_MS must invalidate the stale pending job or it would
-            // pin the old parameters forever.
-            val pending = scheduler.getPendingJob(JOB_ID)
-            if (pending != null && pending.intervalMillis == PERIOD_MS) return
-            scheduler.schedule(
-                JobInfo.Builder(JOB_ID, ComponentName(context, SampleJob::class.java))
-                    .setPeriodic(PERIOD_MS)
-                    .setPersisted(true) // survives reboot; needs RECEIVE_BOOT_COMPLETED
+            // upgrade flow is git pull && make install), so changed job
+            // parameters must invalidate the stale pending job or it would
+            // pin the old JobInfo forever.
+            val pendingSample = scheduler.getPendingJob(JOB_ID_SAMPLE)
+            if (pendingSample == null || pendingSample.intervalMillis != PERIOD_MS) {
+                scheduler.schedule(
+                    JobInfo.Builder(JOB_ID_SAMPLE, ComponentName(context, SampleJob::class.java))
+                        .setPeriodic(PERIOD_MS)
+                        .setPersisted(true) // survives reboot; needs RECEIVE_BOOT_COMPLETED
+                        .build()
+                )
+                Log.i(TAG, "sampler scheduled: every ${PERIOD_MS / 60_000} min, persisted")
+            }
+
+            val pendingSync = scheduler.getPendingJob(JOB_ID_SYNC)
+            if (pendingSync == null || pendingSync.intervalMillis != PERIOD_MS ||
+                pendingSync.requiredNetwork == null
+            ) {
+                // Default NetworkRequests exclude VPNs; drop NOT_VPN and
+                // require the VPN transport itself. No NetworkSpecifier -
+                // persisted jobs forbid those.
+                val vpn = NetworkRequest.Builder()
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
                     .build()
-            )
-            Log.i(TAG, "job scheduled: every ${PERIOD_MS / 60_000} min, persisted")
+                scheduler.schedule(
+                    JobInfo.Builder(JOB_ID_SYNC, ComponentName(context, SampleJob::class.java))
+                        .setPeriodic(PERIOD_MS)
+                        .setPersisted(true)
+                        .setRequiredNetwork(vpn)
+                        .build()
+                )
+                Log.i(TAG, "sync scheduled: every ${PERIOD_MS / 60_000} min, VPN-gated, persisted")
+            }
         }
 
-        // In the companion so MainActivity's "Sync now" button can run one
-        // cycle on a user-initiated thread. That is still not background
-        // machinery (ADR-0007): it only ever runs while the owner is
-        // looking at the screen, and overlap with a scheduled run is the
-        // same idempotent-overlap case that onStopJob documents.
-        fun runOnce(context: Context) {
+        // One synthesis pass: replay events since the cursor into buffered
+        // samples. Never touches the network.
+        fun sampleOnce(context: Context): Unit = synchronized(dbLock) {
             val prefs = Prefs(context)
             // First run ever: start at the current instant - history before
             // install is not reported (spec: no backfill).
@@ -86,33 +120,58 @@ class SampleJob : JobService() {
                 val samplesNote =
                     if (prefs.paused) "${result.sampleTimesMs.size} samples dropped (paused)"
                     else "${result.sampleTimesMs.size} samples"
-                // Blank URL = first launch, not yet configured: skip the
-                // doomed request but keep buffering; the summary names the
-                // actual fix instead of a cryptic connect error.
-                val outcome =
-                    if (prefs.serverUrl.isBlank())
-                        Syncer.Outcome.Failed(0, "server url not configured (set it in the app)")
-                    else Syncer(prefs.serverUrl, prefs.source).sync(store)
-                val summary = when (outcome) {
+                val summary = "${Timestamps.format(now)}: ${events.size} events, $samplesNote"
+                prefs.lastRunSummary = summary
+                Log.i(TAG, summary)
+            } finally {
+                store.close()
+            }
+        }
+
+        // One sync pass: upload buffered samples, prune old synced rows.
+        // Runs from the VPN-gated job, so by the time it fires the tunnel
+        // exists (barring races, which just read as a failed attempt).
+        fun syncOnce(context: Context): Unit = synchronized(dbLock) {
+            val prefs = Prefs(context)
+            val now = System.currentTimeMillis()
+            // Blank URL = first launch, not yet configured: skip the doomed
+            // request but keep buffering; the summary names the actual fix
+            // instead of a cryptic connect error.
+            if (prefs.serverUrl.isBlank()) {
+                prefs.lastSyncSummary =
+                    "${Timestamps.format(now)}: skipped, server url not configured (set it in the app)"
+                Log.i(TAG, prefs.lastSyncSummary)
+                return
+            }
+
+            val store = Store(context)
+            try {
+                val summary = when (val outcome = Syncer(prefs.serverUrl, prefs.source).sync(store)) {
                     is Syncer.Outcome.Ok -> {
                         // Only when rows actually reached the server: an
                         // empty-queue Ok(0) says nothing about reachability,
                         // and "last successful sync" reads as a health signal.
                         if (outcome.synced > 0) prefs.lastSyncTs = Timestamps.format(now)
                         store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
-                        "${Timestamps.format(now)}: ${events.size} events, " +
-                            "$samplesNote, synced ${outcome.synced}"
+                        "${Timestamps.format(now)}: synced ${outcome.synced}"
                     }
                     is Syncer.Outcome.Failed ->
-                        "${Timestamps.format(now)}: ${events.size} events, " +
-                            "$samplesNote, " +
-                            "sync FAILED after ${outcome.synced}: ${outcome.reason}"
+                        "${Timestamps.format(now)}: FAILED after ${outcome.synced}: ${outcome.reason}"
                 }
-                prefs.lastRunSummary = summary
-                Log.i(TAG, summary)
+                prefs.lastSyncSummary = summary
+                Log.i(TAG, "sync $summary")
             } finally {
                 store.close()
             }
+        }
+
+        // The "Sync now" button: one full cycle, user-initiated, ignoring
+        // the VPN gate (the user is looking at the screen, so the tunnel is
+        // as up as it will ever be). Overlap with the scheduled jobs is
+        // serialized by dbLock and idempotent besides.
+        fun runOnce(context: Context) {
+            sampleOnce(context)
+            syncOnce(context)
         }
 
         // Maps the system's usage events to the Synthesizer's platform-free
@@ -147,14 +206,22 @@ class SampleJob : JobService() {
     // Jobs start on the main thread; sqlite + network work happens on a
     // worker thread that reports completion via jobFinished.
     override fun onStartJob(params: JobParameters): Boolean {
+        // Self-healing across upgrades: persisted jobs keep running the old
+        // JobInfo set after `adb install -r` until the app is opened. Any
+        // job run re-asserting the schedule means new/changed jobs take
+        // effect without a manual launch.
+        schedule(applicationContext)
         thread(name = "are-you-up-job") {
             try {
-                runOnce(applicationContext)
+                when (params.jobId) {
+                    JOB_ID_SYNC -> syncOnce(applicationContext)
+                    else -> sampleOnce(applicationContext)
+                }
             } catch (e: Exception) {
                 // Log-and-finish keeps the periodic schedule alive. No
                 // usage is lost: the cursor only advances after synthesis
                 // and insertion succeeded, so the next run replays.
-                Log.e(TAG, "job failed: ${e.message}", e)
+                Log.e(TAG, "job ${params.jobId} failed: ${e.message}", e)
             }
             jobFinished(params, false)
         }
@@ -162,8 +229,8 @@ class SampleJob : JobService() {
     }
 
     // true = retry later. The worker thread is deliberately not
-    // interrupted; if its run overlaps the retry, the overlap is safe by
-    // idempotence (level-based event replay, INSERT OR IGNORE, server
-    // upsert - see LAB_NOTES 2026-07-11).
+    // interrupted; if its run overlaps the retry, dbLock serializes the db
+    // work and the overlap is safe by idempotence (level-based event
+    // replay, INSERT OR IGNORE, server upsert - see LAB_NOTES 2026-07-11).
     override fun onStopJob(params: JobParameters): Boolean = true
 }

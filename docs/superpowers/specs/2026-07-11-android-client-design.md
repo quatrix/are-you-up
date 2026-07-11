@@ -36,13 +36,19 @@ drives the architecture below.
 2. **No resident process: retrospective reading of the system's usage
    log.** Android's `UsageStatsManager` already records screen-interactive
    and keyguard events continuously, system-side, whether or not our app
-   runs. A `JobScheduler` periodic job (15 min, `setPersisted(true)`)
-   wakes, replays events since a persisted cursor, synthesizes samples,
-   syncs, and exits. No foreground service, no notification, no broadcast
-   receivers, no timers, no wakelocks, no alarms. Process lifetime is a
-   couple of seconds per 15 minutes. Cost: the one-time Usage Access
-   grant in Settings (acceptable for a sideloaded personal app) and up to
-   ~15-30 min upload latency (irrelevant: whoop correction queries
+   runs. Two `JobScheduler` periodic jobs (15 min, `setPersisted(true)`,
+   same `JobService`; split 2026-07-11, ADR-0009): the *sampler* wakes
+   unconditionally, replays events since a persisted cursor, synthesizes
+   samples into the local buffer, and exits; the *sync* job carries
+   `setRequiredNetwork(TRANSPORT_VPN)` so it only fires while the
+   tailscale tunnel exists - constraint satisfaction doubles as a
+   trigger, so unlocking the phone starts the pending upload within
+   seconds. A shared lock serializes their sqlite access. No foreground
+   service, no notification, no broadcast receivers, no timers, no
+   wakelocks, no alarms. Process lifetime is a couple of seconds per 15
+   minutes. Cost: the one-time Usage Access grant in Settings
+   (acceptable for a sideloaded personal app) and upload latency of
+   whenever the VPN is next up (irrelevant: whoop correction queries
    yesterday, and sample timestamps come from the event log, not the
    upload time).
 3. **Synthetic 30s-grid samples keep the contract unchanged.** For each
@@ -128,8 +134,9 @@ of up to 1000 (looping until drained, since a long-offline backlog can
 exceed one batch); mark synced only when the ack `{"accepted": N}` equals
 the batch size (a bare 200 is not an ack - captive-portal rule); prune
 synced rows older than 7 days; failures keep rows and wait for the next
-job run - no backoff, no retry state. `HttpURLConnection` with 30s
-connect/read timeouts.
+sync-job run - no backoff, no retry state (the VPN gate, ADR-0009,
+already makes runs coincide with reachability). `HttpURLConnection`
+with 30s connect/read timeouts.
 
 ## Config and UI
 
@@ -142,8 +149,9 @@ first launch; blank means the job buffers without syncing), `source`
 `MainActivity`, one plain XML screen, is the only UI:
 
 - Usage Access status, with a button opening the Settings grant page.
-- Last job run and its result (windows found, samples synthesized,
-  sync outcome), last successful sync time, unsynced row count.
+- Last sampler run (events seen, samples synthesized), last sync
+  attempt and its outcome, last successful sync time, unsynced row
+  count.
 - Pause toggle: while paused the job still runs and still syncs any
   buffered rows, but synthesizes nothing and advances the cursor - the
   paused span becomes a permanent gap, matching mac pause semantics.
@@ -153,8 +161,9 @@ first launch; blank means the job buffers without syncing), `source`
   scheduled job; not background machinery (only runs with the screen
   open), so ADR-0007 holds.
 - `server_url` text field with save.
-- Opening the activity (re)schedules the job; first launch is what arms
-  everything.
+- Opening the activity (re)schedules both jobs; first launch is what
+  arms everything. Job runs also re-assert the schedule, so upgrades
+  converge on changed JobInfos without a manual launch.
 
 No notification of any kind. Logging goes to logcat, tag `are-you-up`,
 one info line per job run; `adb logcat -s are-you-up` is the tail

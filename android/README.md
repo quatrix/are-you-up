@@ -41,10 +41,22 @@ footprint and no notification. Design:
 ## Operate
 
     make log                                           # tail the app's logcat
-    adb shell cmd jobscheduler run -f dev.areyouup 1   # force a job run now
+    adb shell cmd jobscheduler run -f dev.areyouup 1   # force a sampler run now
+    adb shell cmd jobscheduler run -f dev.areyouup 2   # force a sync now (-f overrides the VPN gate)
 
-The app screen shows the usage-access state, the last job run summary,
-the last successful sync, and the unsynced sample count. "Sync now"
+Two persisted 15-min jobs: the sampler (1) runs unconditionally and
+buffers samples; sync (2) waits for a VPN network, so it fires within
+seconds of tailscale coming up - unlocking the phone triggers the
+upload instead of hoping to coincide with it (ADR-0009).
+
+Recommended tailscale settings on the phone, so the tunnel is up as
+often as possible: Settings > Network & internet > VPN > Tailscale >
+**Always-on VPN**, and Settings > Apps > Tailscale > Battery >
+**Unrestricted**.
+
+The app screen shows the usage-access state, the last sampler run, the
+last sync attempt, the last successful sync, and the unsynced sample
+count. "Sync now"
 runs one job cycle immediately (useful right after changing the server
 URL instead of waiting for the 15-min tick). "Paused" stops
 sample synthesis (the paused span becomes a permanent gap); syncing of

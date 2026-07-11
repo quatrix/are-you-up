@@ -78,6 +78,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.status).text = """
             usage access: ${if (hasUsageAccess()) "granted" else "NOT GRANTED"}
             last run: ${prefs.lastRunSummary}
+            last sync: ${prefs.lastSyncSummary}
             last successful sync: ${prefs.lastSyncTs}
             unsynced samples: $unsynced
         """.trimIndent()
