@@ -87,6 +87,15 @@ class SyncerTest {
     }
 
     @Test
+    fun trailingSlashServerUrlIsTolerated() {
+        // A configured URL like "http://host:8080/" must not become the
+        // path //v1/samples (permanent 404).
+        val url = startServer(accepting())
+        val outcome = Syncer("$url/", "pixel").sync(FakeQueue(samples(1)))
+        assertEquals(Syncer.Outcome.Ok(1), outcome)
+    }
+
+    @Test
     fun non200LeavesRowsUnsynced() {
         val url = startServer { _, _ -> 500 to "boom" }
         val queue = FakeQueue(samples(3))

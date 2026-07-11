@@ -1222,6 +1222,15 @@ class SyncerTest {
     }
 
     @Test
+    fun trailingSlashServerUrlIsTolerated() {
+        // A configured URL like "http://host:8080/" must not become the
+        // path //v1/samples (permanent 404).
+        val url = startServer(accepting())
+        val outcome = Syncer("$url/", "pixel").sync(FakeQueue(samples(1)))
+        assertEquals(Syncer.Outcome.Ok(1), outcome)
+    }
+
+    @Test
     fun non200LeavesRowsUnsynced() {
         val url = startServer { _, _ -> 500 to "boom" }
         val queue = FakeQueue(samples(3))
@@ -1333,7 +1342,9 @@ class Syncer(private val serverUrl: String, private val source: String) {
             }))
             .toString()
         return try {
-            val conn = URL("$serverUrl/v1/samples").openConnection() as HttpURLConnection
+            // trimEnd: a trailing slash in the configured URL would make
+            // the path //v1/samples - a permanent, puzzling 404.
+            val conn = URL("${serverUrl.trimEnd('/')}/v1/samples").openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "POST"
                 conn.connectTimeout = TIMEOUT_MS
@@ -1370,7 +1381,7 @@ class Syncer(private val serverUrl: String, private val source: String) {
 cd android && ./gradlew --console=plain test
 ```
 
-Expected: `BUILD SUCCESSFUL`, 32 tests passing.
+Expected: `BUILD SUCCESSFUL`, 33 tests passing.
 
 - [ ] **Step 6: Commit**
 
@@ -1774,7 +1785,7 @@ In `android/app/src/main/AndroidManifest.xml`, insert inside
 cd android && ./gradlew --console=plain test assembleDebug
 ```
 
-Expected: `BUILD SUCCESSFUL`, 32 tests passing, APK produced.
+Expected: `BUILD SUCCESSFUL`, 33 tests passing, APK produced.
 
 - [ ] **Step 7: Commit**
 
@@ -1988,7 +1999,7 @@ and in the Commands block, after the `make -C mac test` line, add:
 cd android && make test
 ```
 
-Expected: `BUILD SUCCESSFUL`, 32 tests passing.
+Expected: `BUILD SUCCESSFUL`, 33 tests passing.
 
 - [ ] **Step 7: Commit**
 

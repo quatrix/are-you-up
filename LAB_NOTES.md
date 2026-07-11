@@ -283,3 +283,37 @@ Consequence: Syncer tests use MockWebServer 4.12.0 (test-only dep) as
 the real loopback socket server; spec decision 4 and the plan were
 amended. General lesson for this repo: JVM-unit-test code in the android
 module may only import android.jar-visible APIs, regardless of runner.
+
+## 2026-07-11 - Syncer adversarial-response probes (android Task 6 quality review)
+
+Three temporary MockWebServer probes (`ReviewProbeTest.kt`, deleted
+after the run) against the real `Syncer`, plus two code traces:
+
+- **Ack as JSON string**: a server answering `{"accepted": "1"}`
+  (string, not number) passes the ack check - org.json's `getInt`
+  coerces numeric strings. Lenient, but fail-safe: coercion can only
+  admit a *correct* count in string form; a wrong count or non-numeric
+  string still fails. Left as-is.
+- **Trailing slash in serverUrl**: `Syncer("http://host:port/", ...)`
+  produces request path `//v1/samples` (observed via the dispatcher),
+  which a path-routed server 404s -> `Failed(status 404)`, rows stay
+  unsynced. Fail-safe but a config footgun; the mac twin is immune
+  (`appendingPathComponent` normalizes). The plan's Task 7 UI trims
+  `trimEnd('/')` on input, which papers over it; noted in SESSION.md.
+- **Non-ASCII source**: `source = "pixel-ünïcode-עברית"` round-trips
+  byte-exact (Kotlin `toByteArray()`/`decodeToString()` default UTF-8,
+  matching the backend's UTF-8-only axum String extractor).
+- **Duplicate-ts livelock trace (ruled out twice over)**: the feared
+  case - a batch with two equal ts strings making `accepted !=
+  batch.size` and livelocking the drain - is unreachable. (1) Batches
+  come from `Store.nextBatch`, a SELECT over `ts TEXT PRIMARY KEY`, so
+  a batch cannot contain duplicate ts strings; the Synthesizer *can*
+  emit two instants formatting to the same second (window end + next
+  window start <1s apart), but `INSERT OR IGNORE` collapses them before
+  any batch exists. (2) Even with duplicates, `post_samples` returns
+  `accepted = req.samples.len()` (request array length, backend
+  lib.rs:148), not rows-changed, so the ack would still match.
+- **Unread errorStream on non-200 is not a leak**: the early return
+  skips `errorStream`, which only forfeits keep-alive reuse - and
+  `disconnect()` in `finally` forfeits that anyway by closing the
+  socket. At ~3 batches/day, connection reuse is worthless here.

@@ -44,7 +44,9 @@ class Syncer(private val serverUrl: String, private val source: String) {
             }))
             .toString()
         return try {
-            val conn = URL("$serverUrl/v1/samples").openConnection() as HttpURLConnection
+            // trimEnd: a trailing slash in the configured URL would make
+            // the path //v1/samples - a permanent, puzzling 404.
+            val conn = URL("${serverUrl.trimEnd('/')}/v1/samples").openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "POST"
                 conn.connectTimeout = TIMEOUT_MS
