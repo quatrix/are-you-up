@@ -86,3 +86,48 @@ would be fragile even if it did.
 toolchain state. Cost: a specific patch version is now pinned in the
 repo and must be bumped manually as the project's minimum-supported-Rust
 needs change; that is standard, low-effort toolchain maintenance.
+
+## 0006 - Android activity signal is screen-interactive, not input-only
+
+**Date:** 2026-07-11 | **Status:** accepted
+**Context:** The android client needs an activity signal. Android has no
+public global seconds-since-last-input API, so the mac's ADR-0001
+semantics cannot be replicated cheaply.
+**Decision:** The pixel counts as active while the screen is on and the
+keyguard is dismissed; everything else is a no-signal gap. Samples carry
+`idle_s=0` during interactive windows, so the server derives only
+`active` intervals or gaps for this source. The screen timeout itself is
+an input-driven idle detector, which keeps this close to input-only in
+practice.
+**Alternatives:** `UsageStatsManager` `USER_INTERACTION` events would
+give true seconds-since-last-touch (hands-off video would read idle),
+but need event-behavior probing, more code, and buy little at a 15-min
+threshold; an AccessibilityService observing input is invasive overkill.
+**Consequences:** Media watching with the screen on reads as active,
+diverging from ADR-0001 on the mac. If whoop comparisons show this
+matters, the event source can be swapped without touching the API
+contract. No permissions beyond Usage Access (required anyway by 0007).
+
+## 0007 - Android client has no resident process; a 15-min job reads the system usage log
+
+**Date:** 2026-07-11 | **Status:** accepted
+**Context:** Hard requirement: imperceptible battery/CPU/memory footprint
+and no visible presence (no persistent notification).
+**Decision:** No foreground service, receivers, timers, or alarms. A
+persisted `JobScheduler` periodic job (15 min) replays
+`UsageStatsManager` screen/keyguard events from a stored cursor,
+synthesizes 30s-grid samples retrospectively, syncs, and exits. The OS
+records the events whether or not the app runs; the job's process lives
+seconds per cycle.
+**Alternatives:** A foreground service observing SCREEN_ON/OFF broadcasts
+live (the mac-like design) works without Usage Access but pins a
+resident process and a permanent notification - exactly what the
+requirement forbids. WorkManager adds an AndroidX dependency for nothing
+JobScheduler lacks here.
+**Consequences:** Zero background footprint and free crash/reboot
+recovery (events are system-side; reruns catch up). Costs: the one-time
+Usage Access grant, up to ~15-30 min upload latency (harmless: queries
+target past days, timestamps come from the event log), force-stop parks
+the job until the app is reopened, and correctness depends on
+`queryEvents` behavior - verified by an on-device probe as the
+implementation plan's first task.
