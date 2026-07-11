@@ -13,6 +13,7 @@ footprint and no notification. Design:
     # any JDK 17+ works; skip temurin if one is already installed
     # (the temurin cask needs interactive sudo for its .pkg)
     brew install --cask temurin@17 android-commandlinetools
+    brew install --cask android-platform-tools    # puts adb on PATH
     yes | sdkmanager --licenses
     sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
     echo "sdk.dir=/opt/homebrew/share/android-commandlinetools" > local.properties
@@ -63,5 +64,5 @@ minute.
 - Job never runs: open the app once - force-stop parks persisted jobs
   until the next launch.
 - `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: the APK was built on a machine
-  with a different debug keystore. `adb uninstall dev.areyouup` first
+  with a different debug keystore. `make uninstall` first
   (buffered samples are lost; anything synced is already on the server).

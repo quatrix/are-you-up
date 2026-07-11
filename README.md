@@ -1,6 +1,7 @@
 # are-you-up
 
-Tracks keyboard/mouse activity on my devices and serves it as
+Tracks activity on my devices (keyboard/mouse on the mac, screen
+usage on the pixel) and serves it as
 active/idle intervals, as a correction signal for whoop's time-in-bed
 detection (sofa laptop sessions are not bed time).
 
@@ -44,7 +45,7 @@ Query (note: percent-encode `+` in timestamps as `%2B`):
     curl "http://<server>:8080/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-11T08:00:00%2B03:00"
 
 Full API reference: `backend/README.md`. Client paths, menu, and env
-vars: `mac/README.md`.
+vars: `mac/README.md`. Android setup: `android/README.md`.
 
 ## Layout
 
