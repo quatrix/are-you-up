@@ -360,3 +360,46 @@ on-device confirmations are listed for Task 9). Verified the build:
   window is process death before the queued write commits - the cursor
   regresses at most one run and the replay is idempotent, so no
   read-after-write bug exists in-process.
+
+## 2026-07-11 - Android on-device E2E: full pipeline + recovery paths verified on the Pixel 7
+
+Ran the Task 9 smoke plus the T7 review's on-device checklist against
+the real backend (100.88.181.84:8080). Results:
+
+- Job arming and first run: opening the activity logged "job scheduled:
+  every 15 min, persisted" and JobScheduler fired an immediate first
+  run: "0 events, 0 samples, synced 0" - correct (cursor starts at
+  install time, no backfill).
+- Real usage: after ~2 min of scripted phone use, a forced run produced
+  "8 events, 6 samples, synced 6" and the server derived an exact
+  active interval (13:39:38-13:41:18+03:00, source=pixel). Background
+  job process CAN read usage events and POST cleartext over the tailnet
+  (checklist b, g).
+- Activity open during a run: clean, no SQLiteDatabaseLockedException (f).
+- Force-stop parks the persisted job ("Could not find job 1"); reopening
+  re-arms it and state returns to "waiting" (e).
+- Forced mid-run timeout: unreachable in practice - the run completes in
+  well under a second, cmd jobscheduler timeout found "No matching
+  executing jobs". The onStopJob overlap window is theoretical at this
+  runtime; idempotence covers the remainder (d).
+- Reboot: job state "waiting" after boot WITHOUT opening the app; the
+  post-boot run captured 5 events including the shutdown and synthesized
+  the post-unlock samples (c).
+- Unplanned bonus - live server-unreachable recovery: tailscale had not
+  reconnected after boot, so two consecutive runs failed with connect
+  timeouts ("sync FAILED after 0: request failed: failed to connect...")
+  while samples kept buffering. Once tailscale was up, one run flushed
+  everything: "6 events, 11 samples, synced 14" - 4 buffered + 11 new -
+  1 boundary duplicate collapsed by INSERT OR IGNORE (the arithmetic
+  confirms live dedupe). The server then showed two active intervals
+  with the reboot correctly absent as a no-signal gap.
+- adb install -r over the running install preserves the armed job
+  ("waiting" immediately after reinstall) - the documented upgrade flow
+  is safe (c, second half).
+
+Not yet observed (will confirm passively over the coming days): item
+(h), overnight Doze deferral followed by a catch-up run. Nothing in the
+design depends on it beyond what (c)-(g) already proved.
+
+Conclusion: the retrospective event-replay client works end to end on
+the target device, including every recovery path we could trigger.
