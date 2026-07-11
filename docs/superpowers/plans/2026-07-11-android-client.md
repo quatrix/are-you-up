@@ -1541,11 +1541,15 @@ class SampleJob : JobService() {
 
     private fun runOnce(context: Context) {
         val prefs = Prefs(context)
-        val now = System.currentTimeMillis()
-        // First run ever: start at now - history before install is not
-        // reported (spec: no backfill).
+        // First run ever: start at the current instant - history before
+        // install is not reported (spec: no backfill).
         val cursor = prefs.cursor
-            ?: Synthesizer.Cursor(now, screenOn = false, unlocked = false)
+            ?: Synthesizer.Cursor(System.currentTimeMillis(), screenOn = false, unlocked = false)
+        // Clamped against backward clock steps (NTP/carrier resync between
+        // runs): now < cursor.tsMs would synthesize a spurious past sample
+        // and regress the cursor (LAB_NOTES 2026-07-11). Clamping turns the
+        // run into a no-op span instead; the next run heals naturally.
+        val now = maxOf(System.currentTimeMillis(), cursor.tsMs)
 
         val events = queryEvents(context, cursor.tsMs, now)
         val result = Synthesizer.synthesize(cursor, events, now)

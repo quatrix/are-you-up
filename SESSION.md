@@ -29,14 +29,6 @@
   re-emitted rows), but Task 7's SampleJob should clamp
   `now = max(now, cursor.tsMs)` - or skip the run - when the clock has
   regressed. See LAB_NOTES.md 2026-07-11 Task 4 probe entry.
-- Android `Syncer` builds its endpoint by string interpolation
-  (`"$serverUrl/v1/samples"`), so a trailing slash in the configured
-  server URL yields `//v1/samples` and a permanent 404 (verified
-  empirically, see LAB_NOTES.md 2026-07-11 Task 6 probes). Fail-safe
-  (rows stay unsynced) and Task 7's settings UI plans to `trimEnd('/')`
-  on input, but that is a cross-file invariant; a one-line
-  `serverUrl.trimEnd('/')` in Syncer would make it local, like the mac
-  twin's `appendingPathComponent`.
 - Android `Syncer.postVerified` reads the response body with an
   unbounded `readBytes()`. A hostile or broken server streaming an
   enormous body would raise `OutOfMemoryError`, which - being an
