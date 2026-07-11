@@ -261,3 +261,25 @@ cache of compiled statements keyed by SQL text (default 25), so
 compiled UPDATE rather than re-parsing 1000 times - the mac twin's
 explicit prepared-statement reuse happens implicitly here. At ~3
 batches/day this was never a hot path anyway.
+
+## 2026-07-11 - com.sun.net.httpserver is uncompilable in AGP unit tests
+
+The android plan's Task 6 test harness (a real local
+com.sun.net.httpserver.HttpServer, JDK stdlib) fails to compile in the
+app module's test source set: AGP compiles unit-test Kotlin/Java against
+the compileSdk android.jar stub (here platforms/android-34/android.jar),
+and android.jar only declares the java.*/com.sun.* subset that exists in
+ART's libcore - jdk.httpserver was never Android API. The host JDK the
+tests later RUN on is irrelevant; symbol resolution happens against the
+stub jar.
+
+Ruled out (by direct experiment, all reverted): a jvmTarget/--release
+cross-compilation restriction (javac --release 17/21 compiles the import
+fine on this JDK), forcing test-compile targets to the host JDK version
+(fails identically), -Xadd-modules=jdk.httpserver (no effect). Only the
+android.jar-as-compile-classpath explanation fits.
+
+Consequence: Syncer tests use MockWebServer 4.12.0 (test-only dep) as
+the real loopback socket server; spec decision 4 and the plan were
+amended. General lesson for this repo: JVM-unit-test code in the android
+module may only import android.jar-visible APIs, regardless of runner.

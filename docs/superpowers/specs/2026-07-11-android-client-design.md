@@ -57,9 +57,13 @@ drives the architecture below.
    constraint. sqlite via `android.database.sqlite`, HTTP via
    `HttpURLConnection`, JSON via `org.json` (ships in the framework),
    scheduling via `JobScheduler`, time via `java.time`. Test-only
-   exception: Robolectric, so `Store` tests run on the JVM instead of
-   needing the phone plugged in. `minSdk 34` (the Pixel 7 is past
-   Android 14; no legacy branches).
+   exceptions (never shipped in the APK): Robolectric, so `Store` tests
+   run on the JVM instead of needing the phone plugged in; `org.json`,
+   because the mockable android.jar stubs it for JVM tests; and
+   MockWebServer, because android.jar omits JDK-internal modules like
+   `com.sun.net.httpserver`, so a real loopback test server needs a
+   library. `minSdk 34` (the Pixel 7 is past Android 14; no legacy
+   branches).
 
 ## Architecture
 
@@ -209,9 +213,12 @@ release-signing setup.
   `Synthesizer` (unlock/lock sequences, re-light inside lock delay,
   window open across job runs via cursor state, shutdown closing a
   window, sub-30s sessions, empty event ranges, paused runs);
-  `Syncer` against a real local `com.sun.net.httpserver.HttpServer`
-  (JDK stdlib): batching, drain loop, marks-on-verified-ack,
-  keeps-on-failure, keeps-on-partial-ack, keeps-on-non-JSON-200.
+  `Syncer` against a real loopback HTTP socket via MockWebServer
+  (test-only dependency; the original plan's `com.sun.net.httpserver`
+  cannot compile - AGP builds unit tests against android.jar, which
+  omits JDK-internal modules, see LAB_NOTES.md 2026-07-11): batching,
+  drain loop, marks-on-verified-ack, keeps-on-failure,
+  keeps-on-partial-ack, keeps-on-non-JSON-200.
 - **Robolectric:** `Store` (insert-or-ignore, unsynced query order,
   mark-synced, prune-only-synced).
 - **Glue untested:** `SampleJob` and `MainActivity` stay thin, same rule

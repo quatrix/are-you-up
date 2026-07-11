@@ -17,7 +17,9 @@ Pure logic lives in `core/` (fully tested); `SampleJob`/`MainActivity`/
 targetSdk 34, framework-only at runtime (`android.database.sqlite`,
 `HttpURLConnection`, `org.json`, `JobScheduler`, `java.time`). Test-only:
 JUnit 4.13.2, Robolectric 4.14.1, `org.json:json` (android.jar ships
-stubbed org.json for JVM unit tests).
+stubbed org.json for JVM unit tests), MockWebServer 4.12.0 (android.jar
+omits JDK-internal modules like `com.sun.net.httpserver`, so the Syncer
+tests need a library for their real loopback server).
 
 **Spec:** `docs/superpowers/specs/2026-07-11-android-client-design.md` -
 read it first. The API contract is in
@@ -61,7 +63,7 @@ android/
       SynthesizerTest.kt
       StoreTest.kt              (Robolectric)
       FakeQueue.kt
-      SyncerTest.kt             (com.sun.net.httpserver)
+      SyncerTest.kt             (MockWebServer loopback socket)
 ```
 
 ---
@@ -1092,6 +1094,19 @@ git commit -m "feat(android): sqlite sample buffer with sync bookkeeping"
 - Create: `android/app/src/main/java/dev/areyouup/core/Syncer.kt`
 - Test: `android/app/src/test/java/dev/areyouup/core/FakeQueue.kt`
 - Test: `android/app/src/test/java/dev/areyouup/core/SyncerTest.kt`
+- Modify: `android/app/build.gradle.kts` (add the MockWebServer test dependency)
+
+- [ ] **Step 0: Add the test-server dependency**
+
+In `android/app/build.gradle.kts`, add to the dependencies block after
+the org.json line:
+
+```kotlin
+    // Real loopback HTTP server for Syncer tests: unit tests compile
+    // against android.jar, which excludes JDK-internal modules like
+    // com.sun.net.httpserver (jdk.httpserver was never Android API).
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+```
 
 - [ ] **Step 1: Write the fake queue**
 
@@ -1120,43 +1135,51 @@ class FakeQueue(samples: List<Sample>) : SampleQueue {
 ```kotlin
 package dev.areyouup.core
 
-import com.sun.net.httpserver.HttpServer
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.net.InetSocketAddress
 
 // Runs the real Syncer (real HttpURLConnection) against a real local
-// HTTP server from the JDK - no mocking of the transport.
+// HTTP server socket (MockWebServer) - no mocking of the transport.
+// (com.sun.net.httpserver is not usable here: AGP compiles unit tests
+// against android.jar, which omits JDK-internal modules.)
 class SyncerTest {
 
-    private var server: HttpServer? = null
+    private var server: MockWebServer? = null
     private val requests = mutableListOf<String>()
 
     private fun startServer(handler: (callIndex: Int, body: String) -> Pair<Int, String>): String {
-        val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        s.createContext("/v1/samples") { exchange ->
-            val body = exchange.requestBody.readBytes().decodeToString()
-            val index: Int
-            synchronized(requests) {
-                index = requests.size
-                requests.add(body)
+        val s = MockWebServer()
+        s.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                // Parity with a path-routed server: anything but the
+                // contract path is a 404, so a Syncer that POSTs to the
+                // wrong path fails the ack check loudly.
+                if (request.path != "/v1/samples") return MockResponse().setResponseCode(404)
+                val body = request.body.readUtf8()
+                val index: Int
+                synchronized(requests) {
+                    index = requests.size
+                    requests.add(body)
+                }
+                val (code, response) = handler(index, body)
+                return MockResponse().setResponseCode(code).setBody(response)
             }
-            val (code, response) = handler(index, body)
-            val bytes = response.toByteArray()
-            exchange.sendResponseHeaders(code, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
         }
         s.start()
         server = s
-        return "http://127.0.0.1:${s.address.port}"
+        return "http://127.0.0.1:${s.port}"
     }
 
     @After
     fun tearDown() {
-        server?.stop(0)
+        server?.shutdown()
     }
 
     private fun accepting() = { _: Int, body: String ->
@@ -1347,7 +1370,7 @@ class Syncer(private val serverUrl: String, private val source: String) {
 cd android && ./gradlew --console=plain test
 ```
 
-Expected: `BUILD SUCCESSFUL`, 31 tests passing.
+Expected: `BUILD SUCCESSFUL`, 32 tests passing.
 
 - [ ] **Step 6: Commit**
 
@@ -1751,7 +1774,7 @@ In `android/app/src/main/AndroidManifest.xml`, insert inside
 cd android && ./gradlew --console=plain test assembleDebug
 ```
 
-Expected: `BUILD SUCCESSFUL`, 31 tests passing, APK produced.
+Expected: `BUILD SUCCESSFUL`, 32 tests passing, APK produced.
 
 - [ ] **Step 7: Commit**
 
@@ -1965,7 +1988,7 @@ and in the Commands block, after the `make -C mac test` line, add:
 cd android && make test
 ```
 
-Expected: `BUILD SUCCESSFUL`, 31 tests passing.
+Expected: `BUILD SUCCESSFUL`, 32 tests passing.
 
 - [ ] **Step 7: Commit**
 
