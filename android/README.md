@@ -44,7 +44,9 @@ footprint and no notification. Design:
     adb shell cmd jobscheduler run -f dev.areyouup 1   # force a job run now
 
 The app screen shows the usage-access state, the last job run summary,
-the last successful sync, and the unsynced sample count. "Paused" stops
+the last successful sync, and the unsynced sample count. "Sync now"
+runs one job cycle immediately (useful right after changing the server
+URL instead of waiting for the 15-min tick). "Paused" stops
 sample synthesis (the paused span becomes a permanent gap); syncing of
 already-buffered rows continues. "Dump events to log" writes the last
 2h of raw screen/keyguard events to logcat for debugging.

@@ -147,6 +147,11 @@ first launch; blank means the job buffers without syncing), `source`
 - Pause toggle: while paused the job still runs and still syncs any
   buffered rows, but synthesizes nothing and advances the cursor - the
   paused span becomes a permanent gap, matching mac pause semantics.
+- "Sync now" button (added 2026-07-11): runs one job cycle immediately
+  on a user-initiated thread - e.g. right after setting the server URL
+  instead of waiting for the 15-minute tick. Same code path as the
+  scheduled job; not background machinery (only runs with the screen
+  open), so ADR-0007 holds.
 - `server_url` text field with save.
 - Opening the activity (re)schedules the job; first launch is what arms
   everything.

@@ -51,6 +51,97 @@ class SampleJob : JobService() {
             )
             Log.i(TAG, "job scheduled: every ${PERIOD_MS / 60_000} min, persisted")
         }
+
+        // In the companion so MainActivity's "Sync now" button can run one
+        // cycle on a user-initiated thread. That is still not background
+        // machinery (ADR-0007): it only ever runs while the owner is
+        // looking at the screen, and overlap with a scheduled run is the
+        // same idempotent-overlap case that onStopJob documents.
+        fun runOnce(context: Context) {
+            val prefs = Prefs(context)
+            // First run ever: start at the current instant - history before
+            // install is not reported (spec: no backfill).
+            val cursor = prefs.cursor
+                ?: Synthesizer.Cursor(System.currentTimeMillis(), screenOn = false, unlocked = false)
+            // Clamped against backward clock steps (NTP/carrier resync between
+            // runs): now < cursor.tsMs would synthesize a spurious past sample
+            // and regress the cursor (LAB_NOTES 2026-07-11). Clamping turns the
+            // run into a no-op span instead; the next run heals naturally.
+            val now = maxOf(System.currentTimeMillis(), cursor.tsMs)
+
+            val events = queryEvents(context, cursor.tsMs, now)
+            val result = Synthesizer.synthesize(cursor, events, now)
+
+            val store = Store(context)
+            try {
+                if (prefs.paused) {
+                    // Paused spans become permanent gaps: drop the samples but
+                    // still advance the cursor (mac pause semantics).
+                    Log.i(TAG, "paused: dropped ${result.sampleTimesMs.size} samples")
+                } else {
+                    for (t in result.sampleTimesMs) store.insert(Timestamps.format(t), 0)
+                }
+                prefs.cursor = result.next
+
+                val samplesNote =
+                    if (prefs.paused) "${result.sampleTimesMs.size} samples dropped (paused)"
+                    else "${result.sampleTimesMs.size} samples"
+                // Blank URL = first launch, not yet configured: skip the
+                // doomed request but keep buffering; the summary names the
+                // actual fix instead of a cryptic connect error.
+                val outcome =
+                    if (prefs.serverUrl.isBlank())
+                        Syncer.Outcome.Failed(0, "server url not configured (set it in the app)")
+                    else Syncer(prefs.serverUrl, prefs.source).sync(store)
+                val summary = when (outcome) {
+                    is Syncer.Outcome.Ok -> {
+                        // Only when rows actually reached the server: an
+                        // empty-queue Ok(0) says nothing about reachability,
+                        // and "last successful sync" reads as a health signal.
+                        if (outcome.synced > 0) prefs.lastSyncTs = Timestamps.format(now)
+                        store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
+                        "${Timestamps.format(now)}: ${events.size} events, " +
+                            "$samplesNote, synced ${outcome.synced}"
+                    }
+                    is Syncer.Outcome.Failed ->
+                        "${Timestamps.format(now)}: ${events.size} events, " +
+                            "$samplesNote, " +
+                            "sync FAILED after ${outcome.synced}: ${outcome.reason}"
+                }
+                prefs.lastRunSummary = summary
+                Log.i(TAG, summary)
+            } finally {
+                store.close()
+            }
+        }
+
+        // Maps the system's usage events to the Synthesizer's platform-free
+        // event type. Without the Usage Access grant, queryEvents just
+        // returns nothing: the job logs "0 events" and the activity shows
+        // the missing grant.
+        private fun queryEvents(
+            context: Context,
+            fromMs: Long,
+            toMs: Long,
+        ): List<Synthesizer.Event> {
+            val usm = context.getSystemService(UsageStatsManager::class.java)
+            val out = mutableListOf<Synthesizer.Event>()
+            val events = usm.queryEvents(fromMs, toMs)
+            val e = UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(e)
+                val kind = when (e.eventType) {
+                    UsageEvents.Event.SCREEN_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_ON
+                    UsageEvents.Event.SCREEN_NON_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_OFF
+                    UsageEvents.Event.KEYGUARD_HIDDEN -> Synthesizer.Event.Kind.UNLOCKED
+                    UsageEvents.Event.KEYGUARD_SHOWN -> Synthesizer.Event.Kind.LOCKED
+                    UsageEvents.Event.DEVICE_SHUTDOWN -> Synthesizer.Event.Kind.SHUTDOWN
+                    else -> null
+                }
+                if (kind != null) out.add(Synthesizer.Event(e.timeStamp, kind))
+            }
+            return out.sortedBy { it.tsMs } // defensive; the API returns sorted
+        }
     }
 
     // Jobs start on the main thread; sqlite + network work happens on a
@@ -75,86 +166,4 @@ class SampleJob : JobService() {
     // idempotence (level-based event replay, INSERT OR IGNORE, server
     // upsert - see LAB_NOTES 2026-07-11).
     override fun onStopJob(params: JobParameters): Boolean = true
-
-    private fun runOnce(context: Context) {
-        val prefs = Prefs(context)
-        // First run ever: start at the current instant - history before
-        // install is not reported (spec: no backfill).
-        val cursor = prefs.cursor
-            ?: Synthesizer.Cursor(System.currentTimeMillis(), screenOn = false, unlocked = false)
-        // Clamped against backward clock steps (NTP/carrier resync between
-        // runs): now < cursor.tsMs would synthesize a spurious past sample
-        // and regress the cursor (LAB_NOTES 2026-07-11). Clamping turns the
-        // run into a no-op span instead; the next run heals naturally.
-        val now = maxOf(System.currentTimeMillis(), cursor.tsMs)
-
-        val events = queryEvents(context, cursor.tsMs, now)
-        val result = Synthesizer.synthesize(cursor, events, now)
-
-        val store = Store(context)
-        try {
-            if (prefs.paused) {
-                // Paused spans become permanent gaps: drop the samples but
-                // still advance the cursor (mac pause semantics).
-                Log.i(TAG, "paused: dropped ${result.sampleTimesMs.size} samples")
-            } else {
-                for (t in result.sampleTimesMs) store.insert(Timestamps.format(t), 0)
-            }
-            prefs.cursor = result.next
-
-            val samplesNote =
-                if (prefs.paused) "${result.sampleTimesMs.size} samples dropped (paused)"
-                else "${result.sampleTimesMs.size} samples"
-            // Blank URL = first launch, not yet configured: skip the
-            // doomed request but keep buffering; the summary names the
-            // actual fix instead of a cryptic connect error.
-            val outcome =
-                if (prefs.serverUrl.isBlank())
-                    Syncer.Outcome.Failed(0, "server url not configured (set it in the app)")
-                else Syncer(prefs.serverUrl, prefs.source).sync(store)
-            val summary = when (outcome) {
-                is Syncer.Outcome.Ok -> {
-                    // Only when rows actually reached the server: an
-                    // empty-queue Ok(0) says nothing about reachability,
-                    // and "last successful sync" reads as a health signal.
-                    if (outcome.synced > 0) prefs.lastSyncTs = Timestamps.format(now)
-                    store.pruneSynced(Timestamps.format(now - PRUNE_AFTER_MS))
-                    "${Timestamps.format(now)}: ${events.size} events, " +
-                        "$samplesNote, synced ${outcome.synced}"
-                }
-                is Syncer.Outcome.Failed ->
-                    "${Timestamps.format(now)}: ${events.size} events, " +
-                        "$samplesNote, " +
-                        "sync FAILED after ${outcome.synced}: ${outcome.reason}"
-            }
-            prefs.lastRunSummary = summary
-            Log.i(TAG, summary)
-        } finally {
-            store.close()
-        }
-    }
-
-    // Maps the system's usage events to the Synthesizer's platform-free
-    // event type. Without the Usage Access grant, queryEvents just
-    // returns nothing: the job logs "0 events" and the activity shows
-    // the missing grant.
-    private fun queryEvents(context: Context, fromMs: Long, toMs: Long): List<Synthesizer.Event> {
-        val usm = context.getSystemService(UsageStatsManager::class.java)
-        val out = mutableListOf<Synthesizer.Event>()
-        val events = usm.queryEvents(fromMs, toMs)
-        val e = UsageEvents.Event()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(e)
-            val kind = when (e.eventType) {
-                UsageEvents.Event.SCREEN_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_ON
-                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> Synthesizer.Event.Kind.SCREEN_OFF
-                UsageEvents.Event.KEYGUARD_HIDDEN -> Synthesizer.Event.Kind.UNLOCKED
-                UsageEvents.Event.KEYGUARD_SHOWN -> Synthesizer.Event.Kind.LOCKED
-                UsageEvents.Event.DEVICE_SHUTDOWN -> Synthesizer.Event.Kind.SHUTDOWN
-                else -> null
-            }
-            if (kind != null) out.add(Synthesizer.Event(e.timeStamp, kind))
-        }
-        return out.sortedBy { it.tsMs } // defensive; the API returns sorted
-    }
 }

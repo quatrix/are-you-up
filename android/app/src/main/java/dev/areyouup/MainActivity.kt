@@ -14,6 +14,7 @@ import android.widget.EditText
 import android.widget.Switch
 import android.widget.TextView
 import dev.areyouup.core.Store
+import kotlin.concurrent.thread
 
 // The only UI: status + config. Opening it is also what (re)arms the
 // job - including after a force-stop, which cancels persisted jobs.
@@ -39,6 +40,24 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         }
         findViewById<Button>(R.id.dump).setOnClickListener { dumpRecentEvents() }
+        findViewById<Button>(R.id.sync_now).setOnClickListener { button ->
+            // One job cycle, right now, user-initiated (e.g. right after
+            // setting the server url instead of waiting for the 15-min
+            // tick). Same code path as the scheduled job; overlap with a
+            // concurrent scheduled run is idempotent (see SampleJob).
+            button.isEnabled = false
+            thread(name = "are-you-up-manual") {
+                try {
+                    SampleJob.runOnce(applicationContext)
+                } catch (e: Exception) {
+                    Log.e(SampleJob.TAG, "manual sync failed: ${e.message}", e)
+                }
+                runOnUiThread {
+                    button.isEnabled = true
+                    refresh()
+                }
+            }
+        }
 
         SampleJob.schedule(this)
     }

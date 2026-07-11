@@ -31,6 +31,12 @@
         android:text="Paused" />
 
     <Button
+        android:id="@+id/sync_now"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Sync now" />
+
+    <Button
         android:id="@+id/grant"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
