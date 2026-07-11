@@ -9,6 +9,9 @@
     --bg: #101014; --row: #1a1a21; --text: #d8d8de; --dim: #7d7d88;
     --mac: #4a9eff; --pixel: #3ddc84; --both: #f5a623; --other: #c678dd;
     --grid: #26262e;
+    /* tracks are lighter than chrome, with hourly lines and stronger
+       every-3h lines matching the axis labels */
+    --track: #22222b; --grid-h: #2c2c36; --grid-3h: #3c3c4a;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -46,13 +49,17 @@
   .day .label { width: 128px; text-align: right; color: var(--dim); white-space: nowrap; font-size: 12px; }
   .day .label b { color: var(--text); font-weight: 600; }
   .day .track {
-    position: relative; flex: 1; height: 26px; background: var(--row);
+    position: relative; flex: 1; height: 38px; background: var(--track);
     border-radius: 4px;
-    background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px);
-    background-size: calc(100% / 24) 100%;
+    background-image:
+      linear-gradient(to right, var(--grid-3h) 1px, transparent 1px),
+      linear-gradient(to right, var(--grid-h) 1px, transparent 1px);
+    background-size: calc(100% / 8) 100%, calc(100% / 24) 100%;
   }
   .day .total { width: 64px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .seg { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; min-width: 2px; }
+  /* min-width keeps sub-pixel blips (a 30s phone check on a 24h axis)
+     visible; adjacent slivers may overdraw by a pixel, acceptable here */
+  .seg { position: absolute; top: 4px; bottom: 4px; border-radius: 3px; min-width: 3px; }
   .seg.mac { background: var(--mac); }
   .seg.pixel { background: var(--pixel); }
   .seg.both { background: var(--both); }
