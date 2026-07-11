@@ -14,7 +14,7 @@ constraint; everything needed ships with macOS). Approved design:
 ## Architecture
 
 - `Sources/AreYouUpCore/` - all logic, fully tested: Timestamps, Store,
-  Config, Log, Syncer, IdleTime.
+  Config, Log, Syncer, IdleTime, WallClockIdle.
 - `Sources/AreYouUp/` - deliberately untested AppKit glue: main,
   AppDelegate (timers, wiring), StatusItemController (menu),
   HistoryStripView (6h strip). Keep it thin; new logic goes in Core
@@ -32,6 +32,9 @@ constraint; everything needed ships with macOS). Approved design:
   false ack permanent data loss.
 - `pruneSynced` deletes only synced rows; unsynced rows are data the
   server has not seen.
+- `idle_s` on the wire is wall-clock. `IdleTime`'s raw stopwatch pauses
+  during sleep (dark wakes would report seconds instead of hours);
+  always feed it through `WallClockIdle` (ADR-0008).
 - Timestamps go through `Timestamps` (RFC 3339, local offset). Sqlite
   TEXT ordering is only approximately chronological across offset
   changes: fine for the documented housekeeping/display uses, unsound

@@ -43,6 +43,10 @@ Data flow:
    `CGEventSource.secondsSinceLastEventType(.combinedSessionState, anyInput)`
    (verified on target machine 2026-07-10: no TCC permission needed;
    `anyInput` is `CGEventType(rawValue: ~0)`, i.e. `kCGAnyInputEventType`).
+   That counter runs on awake time (it pauses during sleep), so the
+   client converts it to wall-clock seconds via `WallClockIdle` before
+   reporting - otherwise closed-lid dark wakes report tens of seconds of
+   idle when the true answer is hours (ADR-0008, LAB_NOTES 2026-07-11).
    Each sample `(ts, idle_s)` is appended to local sqlite with `synced=0`.
 2. Every **60s** the client POSTs up to 1000 unsynced rows per batch to
    `POST /v1/samples` and marks them synced on 200. The server upserts on

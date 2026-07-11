@@ -468,3 +468,57 @@ after the run; all passed) covering cases the committed tests skip:
   already released by then. Concluded: no practical concern at this
   product's scale, but it is a second, undocumented ceiling alongside the
   full-scan one in backend/CLAUDE.md's "Known ceilings".
+
+## 2026-07-11 - Mac reports "active" during closed-lid dark wakes: CGEventSource idle time freezes across sleep
+
+User observation: away from home since ~16:30 IDT with the lid closed,
+yet GET /v1/intervals shows hourly zero-length/short `active` blips for
+`macbook` (16:17:28, 17:59:13, 18:01:25, 18:34:00, 19:02:21, 19:34:18,
+19:56:23, 20:03:14, ...). Pulled the raw samples from the client's own
+db to see what idle_s the client actually sent:
+
+    sqlite3 -readonly "$HOME/Library/Application Support/are-you-up/client.db" \
+      "SELECT ts, idle_s FROM samples WHERE ts >= '2026-07-11T16:00:00' ORDER BY ts"
+    2026-07-11T16:00:05+03:00|5      <- last real use, lid closes
+    2026-07-11T16:17:28+03:00|35     <- dark wake, one 30s tick
+    2026-07-11T17:59:13+03:00|65     <- 102 min later, idle_s grew by 30s
+    2026-07-11T18:01:25+03:00|95
+    2026-07-11T18:34:00+03:00|125
+    2026-07-11T19:02:21+03:00|155
+    2026-07-11T19:34:18+03:00|185
+    2026-07-11T19:35:13+03:00|215
+    2026-07-11T19:56:23+03:00|0      <- real return / lid open
+
+idle_s advances by exactly +30 per sample regardless of how much
+wall-clock time passed. Conclusion: the hypothesis "we only check that
+compute is on, not input" is half right - `IdleTime` DOES measure
+seconds since last mouse/keyboard event
+(`CGEventSource.secondsSinceLastEventType(.combinedSessionState,
+kCGAnyInputEventType)`), but that counter runs on AWAKE time
+(mach_absolute_time domain), not wall clock: it pauses while the
+machine sleeps. A closed lid dark-waking ~hourly runs one-or-two 30s
+sample ticks per wake, so idle_s creeps 30-60s per hour and can never
+reach the 900s threshold; the server correctly classifies idle_s=35 as
+active. The client is lying, not the server.
+
+Fix direction (verified against the data above): awake time between
+ticks is measurable as delta of `ProcessInfo.systemUptime` (also pauses
+during sleep). With no input, raw idle grows by exactly delta-uptime
+(observed: +30 per tick, matching the 30s of awake per wake). So per
+tick: if raw < prevRaw + deltaUptime - slack, real input occurred and
+`lastInputDate = now - raw` is wall-accurate; report
+`idle_s = now - lastInputDate` (wall clock). Needs no sleep/wake
+notifications (dark wakes don't reliably post NSWorkspace
+didWakeNotification), fully unit-testable in Core with injected
+(raw, uptime, now) tuples. Rejected alternatives: suppressing the first
+tick after a >90s gap (multi-tick wakes still blip, e.g. the 19:56:23 +
+19:56:53 pair); NSWorkspace wake notifications (unreliable in dark
+wake, untestable in Core).
+
+Unrelated finding while pulling the data: the deployed server's db now
+starts at 2026-07-11T08:11:41 for BOTH sources - July 9-10 history that
+was queryable yesterday is gone. The morning redeploy (for the timeline
+page) appears to have wiped the server db, so the deployment method
+likely doesn't use the systemd StateDirectory path. Clients prune
+synced rows only after 7 days, so the lost days still exist in the two
+client dbs (marked synced, so they will not re-send on their own).

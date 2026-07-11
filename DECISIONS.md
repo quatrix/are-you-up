@@ -131,3 +131,30 @@ target past days, timestamps come from the event log), force-stop parks
 the job until the app is reopened, and correctness depends on
 `queryEvents` behavior - verified by an on-device probe as the
 implementation plan's first task.
+
+## 0008 - Mac idle is wall-clock, derived from the stopwatch via uptime delta
+
+**Date:** 2026-07-11 | **Status:** accepted
+**Context:** `CGEventSource.secondsSinceLastEventType` counts awake time
+and pauses during sleep. A closed lid dark-waking hourly runs a couple
+of 30s sample ticks per wake, so reported idle_s crept +30s/hour and
+never crossed the 900s threshold: the server showed hourly "active"
+blips while nobody was home (LAB_NOTES 2026-07-11).
+**Decision:** `WallClockIdle` converts the stopwatch to wall-clock
+seconds since last input. `ProcessInfo.systemUptime` pauses during
+sleep identically, so with no input the stopwatch grows by exactly the
+uptime delta between ticks; a reading below that growth means an input
+event reset it, and `now - raw` pins the event to wall clock. Report
+`now - lastInputDate`.
+**Alternatives:** Suppressing the first sample after a >90s tick gap -
+rejected: multi-tick wakes still blip (observed 19:56:23 + 19:56:53
+pair). `NSWorkspace` sleep/wake notifications - rejected: not reliably
+delivered during dark wake, and untestable in Core; the uptime-delta
+rule needs no OS callbacks and unit-tests with injected tuples.
+**Consequences:** Samples taken during dark wakes now honestly report
+hours of idle, and awake-but-untouched behavior is unchanged (uptime and
+wall clock advance together, so the value passes through). Costs: idle
+state lives in the app (a stopwatch reset between process restarts is
+re-anchored on first tick), and a stray input event during a dark wake
+(e.g. a Bluetooth peripheral in a bag) still counts as activity - which
+is arguably correct.

@@ -13,6 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var syncer: Syncer!
     private var statusItem: StatusItemController!
     private var paused = false
+    // Converts the awake-time idle stopwatch to wall-clock idle so
+    // closed-lid dark wakes report hours, not a frozen 35s (ADR-0008).
+    // Ticked only from sampleTick; display paths reuse the last value
+    // (at most samplePeriod stale, same as the sample itself).
+    private var wallClockIdle = WallClockIdle()
+    private var lastIdleS = 0
     // Syncer.syncOnce is not re-entrant: a drain slower than the sync timer
     // (big backlog over a slow link) must not overlap the next tick.
     // Double-send would be idempotent server-side, but wasteful.
@@ -61,7 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func sampleTick() {
         guard !paused else { return }
-        let idleS = IdleTime.secondsSinceLastInput()
+        let idleS = wallClockIdle.tick(raw: IdleTime.rawSecondsSinceLastInput(),
+                                       uptime: ProcessInfo.processInfo.systemUptime,
+                                       now: Date())
+        lastIdleS = idleS
         do {
             try store.insert(Sample(ts: Timestamps.now(), idleS: idleS))
             try store.pruneSynced(before: Timestamps.string(from: Date().addingTimeInterval(-7 * 86_400)))
@@ -85,14 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 self.log.debug("sync ok, nothing new")
             }
-            self.refreshStatus(idleS: IdleTime.secondsSinceLastInput())
+            self.refreshStatus(idleS: self.lastIdleS)
         }
     }
 
     private func togglePause() {
         paused.toggle()
         log.info(paused ? "paused" : "resumed")
-        refreshStatus(idleS: IdleTime.secondsSinceLastInput())
+        refreshStatus(idleS: lastIdleS)
     }
 
     private func refreshStatus(idleS: Int) {
