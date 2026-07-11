@@ -59,7 +59,7 @@ vars: `mac/README.md`. Android setup: `android/README.md`.
 
 Each part has a Makefile with `build`, `run`, and `test`:
 
-    make -C backend test            # 19 tests: unit (derivation) + integration (API)
+    make -C backend test            # 38 tests: unit (derivation, consolidation) + integration (API)
     make -C mac test                # 24 tests: store, syncer, config, log, timestamps
     make -C android test            # JVM unit tests: synthesizer, store, syncer, timestamps
     make -C backend smoke           # E2E: real server process, asserted intervals

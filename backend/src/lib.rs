@@ -154,6 +154,7 @@ struct IntervalsQuery {
     to: Option<String>,
     threshold_s: Option<i64>,
     source: Option<String>,
+    consolidate: Option<String>,
 }
 
 async fn get_intervals(
@@ -192,6 +193,18 @@ async fn get_intervals(
             "threshold_s must be positive".into(),
         );
     }
+    // Strict tri-state: absent, "true", or "false". Bool-ish leniency
+    // ("1", "True") would let a typo silently fall back to the raw shape.
+    let consolidate = match q.consolidate.as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("consolidate must be \"true\" or \"false\", got {other:?}"),
+            );
+        }
+    };
 
     // ponytail: full scan + parse. Measured (Task 4 quality review, see
     // LAB_NOTES.md 2026-07-10) at 1M rows (one device-year): ~0.8s/request
@@ -245,26 +258,52 @@ async fn get_intervals(
         );
     }
 
-    let mut out = Vec::new();
-    for (source, mut samples) in by_source {
-        samples.sort_by_key(|s| s.t);
-        for iv in intervals::derive(&samples, threshold_s, intervals::MAX_GAP_S) {
-            out.push(serde_json::json!({
-                "source": source,
-                "start": iv.start.to_rfc3339(),
-                "end": iv.end.to_rfc3339(),
-                "state": match iv.state {
-                    intervals::State::Active => "active",
-                    intervals::State::Idle => "idle",
-                },
-            }));
-        }
-    }
+    let derived: Vec<(String, Vec<intervals::Interval>)> = by_source
+        .into_iter()
+        .map(|(source, mut samples)| {
+            samples.sort_by_key(|s| s.t);
+            let ivs = intervals::derive(&samples, threshold_s, intervals::MAX_GAP_S);
+            (source, ivs)
+        })
+        .collect();
+
+    let out: Vec<serde_json::Value> = if consolidate {
+        // The cross-source awake-evidence view: active time only, exact
+        // source set per piece, no state field (see the spec's API section).
+        intervals::consolidate(&derived)
+            .into_iter()
+            .map(|iv| {
+                serde_json::json!({
+                    "start": iv.start.to_rfc3339(),
+                    "end": iv.end.to_rfc3339(),
+                    "sources": iv.sources,
+                })
+            })
+            .collect()
+    } else {
+        derived
+            .iter()
+            .flat_map(|(source, ivs)| {
+                ivs.iter().map(move |iv| {
+                    serde_json::json!({
+                        "source": source,
+                        "start": iv.start.to_rfc3339(),
+                        "end": iv.end.to_rfc3339(),
+                        "state": match iv.state {
+                            intervals::State::Active => "active",
+                            intervals::State::Idle => "idle",
+                        },
+                    })
+                })
+            })
+            .collect()
+    };
     debug!(
         from = %from,
         to = %to,
         threshold_s,
         source = q.source.as_deref().unwrap_or("<all>"),
+        consolidate,
         intervals = out.len(),
         "derived intervals"
     );

@@ -77,6 +77,15 @@ Upgrading:
       threshold_s (default 900): seconds without input before time counts
       as idle. Gaps in samples > 90s are returned as no interval at all.
 
+    GET /v1/intervals?from=...&to=...&consolidate=true
+      -> {"intervals": [{"start", "end", "sources": ["macbook", "pixel"]}]}
+      The cross-source awake-evidence view: only ACTIVE time, unioned
+      across sources and split wherever the set of active sources changes
+      (so "sources" is exact per interval; sorted). No "state" field -
+      every interval is active by definition; idle is not evidence and is
+      not returned. consolidate must be exactly true or false (else 400);
+      composes with threshold_s and source.
+
     GET /healthz -> "ok"
 
 ## Test

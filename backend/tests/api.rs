@@ -297,3 +297,132 @@ async fn intervals_from_after_to_is_vacuously_empty() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["intervals"], json!([]));
 }
+
+// ----- consolidate=true: the cross-source awake-evidence view -----
+
+/// mac active 22:00:00-22:01:00 overlapping pixel active 22:00:30-22:01:30.
+async fn seed_two_source_overlap(app: &axum::Router) {
+    for (source, times) in [
+        ("macbook", ["22:00:00", "22:00:30", "22:01:00"]),
+        ("pixel", ["22:00:30", "22:01:00", "22:01:30"]),
+    ] {
+        let samples: Vec<Value> = times
+            .iter()
+            .map(|hms| json!({"ts": format!("2026-07-10T{hms}+03:00"), "idle_s": 1}))
+            .collect();
+        let (status, _) = send(
+            app,
+            "POST",
+            "/v1/samples",
+            Some(json!({"source": source, "samples": samples})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn consolidated_intervals_split_on_source_set_change() {
+    let app = test_app();
+    seed_two_source_overlap(&app).await;
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00&consolidate=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["intervals"],
+        json!([
+            {"start": "2026-07-10T22:00:00+03:00", "end": "2026-07-10T22:00:30+03:00", "sources": ["macbook"]},
+            {"start": "2026-07-10T22:00:30+03:00", "end": "2026-07-10T22:01:00+03:00", "sources": ["macbook", "pixel"]},
+            {"start": "2026-07-10T22:01:00+03:00", "end": "2026-07-10T22:01:30+03:00", "sources": ["pixel"]},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn consolidated_omits_idle_time() {
+    let app = test_app();
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/v1/samples",
+        Some(json!({"source": "macbook", "samples": [
+            {"ts": "2026-07-10T22:00:00+03:00", "idle_s": 2000},
+            {"ts": "2026-07-10T22:00:30+03:00", "idle_s": 2030},
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00&consolidate=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // idle-only data: no awake evidence at all (raw mode would show one
+    // idle interval here; sanity-checked by intervals_threshold tests)
+    assert_eq!(body["intervals"], json!([]));
+}
+
+#[tokio::test]
+async fn consolidate_false_and_absent_return_the_raw_shape() {
+    let app = test_app();
+    seed_two_source_overlap(&app).await;
+    let base = "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00";
+    let (status, absent) = send(&app, "GET", base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, explicit_false) =
+        send(&app, "GET", &format!("{base}&consolidate=false"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(absent, explicit_false);
+    // raw shape: per-source objects with source and state, no sources
+    let first = &absent["intervals"][0];
+    assert!(first["source"].is_string(), "body: {absent}");
+    assert!(first["state"].is_string(), "body: {absent}");
+    assert!(first["sources"].is_null(), "body: {absent}");
+}
+
+#[tokio::test]
+async fn consolidate_rejects_anything_but_true_or_false() {
+    let app = test_app();
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00&consolidate=banana",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("consolidate")),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn consolidate_composes_with_source_filter() {
+    let app = test_app();
+    seed_two_source_overlap(&app).await;
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/intervals?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00&consolidate=true&source=pixel",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["intervals"],
+        json!([
+            {"start": "2026-07-10T22:00:30+03:00", "end": "2026-07-10T22:01:30+03:00", "sources": ["pixel"]},
+        ])
+    );
+}
