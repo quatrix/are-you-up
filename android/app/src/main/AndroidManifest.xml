@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Special permission: the owner grants it once via
+         Settings > Apps > Special app access > Usage access. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Required by JobInfo.setPersisted(); no boot receiver exists or
+         is ever added (ADR-0007). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- usesCleartextTraffic: the server is plain http inside the
+         tailnet (no TLS by design; the tailnet is the perimeter). -->
+    <application
+        android:label="are-you-up"
+        android:usesCleartextTraffic="true">
+    </application>
+</manifest>

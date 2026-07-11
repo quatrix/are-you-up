@@ -8,3 +8,8 @@ mac/.build/
 .claude/settings.local.json
 *.db-shm
 *.db-wal
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
