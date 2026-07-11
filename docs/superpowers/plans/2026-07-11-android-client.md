@@ -1865,6 +1865,8 @@ footprint and no notification. Design:
 
 ## Prerequisites (once, on the dev machine)
 
+    # any JDK 17+ works; skip temurin if one is already installed
+    # (the temurin cask needs interactive sudo for its .pkg)
     brew install --cask temurin@17 android-commandlinetools
     yes | sdkmanager --licenses
     sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
@@ -1927,8 +1929,9 @@ minute.
 
 Kotlin app, single Gradle module, framework-only: NO third-party
 runtime dependencies (hard constraint, mirrors `mac/`). Test-only
-exceptions: Robolectric and `org.json:json` (the mockable android.jar
-stubs org.json for JVM tests). Approved design:
+exceptions: Robolectric, `org.json:json` (the mockable android.jar
+stubs org.json for JVM tests), and MockWebServer (android.jar omits
+JDK-internal modules like com.sun.net.httpserver). Approved design:
 `../docs/superpowers/specs/2026-07-11-android-client-design.md`; ADRs
 0006 (screen-interactive signal) and 0007 (no resident process).
 
