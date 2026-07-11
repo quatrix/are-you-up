@@ -696,10 +696,15 @@ class SynthesizerTest {
 
     @Test
     fun multipleWindowsInOneRun() {
+        // The LOCKED at 46 mirrors the probe-observed device behavior: the
+        // keyguard re-engages ~1s after screen-off (LAB_NOTES 2026-07-11).
+        // Without it, unlocked would survive the gap and the second window
+        // would correctly open at the bare SCREEN_ON (the relight rule).
         val r = Synthesizer.synthesize(
             cursor(),
             listOf(
                 ev(10, SCREEN_ON), ev(10, UNLOCKED), ev(45, SCREEN_OFF),
+                ev(46, LOCKED),
                 ev(200, SCREEN_ON), ev(201, UNLOCKED), ev(230, LOCKED)
             ),
             nowMs = s(600)
