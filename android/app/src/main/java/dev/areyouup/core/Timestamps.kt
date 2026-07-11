@@ -9,6 +9,9 @@ import java.time.format.DateTimeFormatter
 // travel produce the offset in effect at that moment. XXX renders
 // +03:00-style offsets (and Z for UTC, which RFC 3339 also allows).
 object Timestamps {
+    // No explicit Locale needed: ofPattern hard-codes DecimalStyle.STANDARD
+    // (ASCII digits) regardless of device locale - verified empirically,
+    // see LAB_NOTES.md 2026-07-11. Only localizedBy() switches digit sets.
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX")
 
     fun format(epochMs: Long, zone: ZoneId = ZoneId.systemDefault()): String =

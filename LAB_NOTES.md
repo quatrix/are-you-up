@@ -163,3 +163,29 @@ Deviations from the spec's mental model (both benign):
 
 Conclusion: the retrospective event-replay design (ADR-0007) is sound
 on the target device; Synthesizer event mapping needs no changes.
+
+## 2026-07-11 - java.time `ofPattern` digit-locale probe (android Task 3 quality review)
+
+Question: `Timestamps.kt` builds its formatter with
+`DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX")` and no
+explicit `Locale`, while the mac twin deliberately pins
+`en_US_POSIX`. Would a device set to a non-Latin-digit locale (e.g.
+ar-EG, Eastern Arabic numerals) emit digits chrono can't parse?
+
+Ran a single-file JDK 21 repro (`java -Duser.language=ar
+-Duser.country=EG LocaleCheck.java`) formatting
+1_783_764_000_000 ms in Asia/Jerusalem:
+
+    formatted=2026-07-11T13:00:00+03:00
+    decimalStyle=DecimalStyle[0+-.]
+    localizedBy=٢٠٢٦-٠٧-١١T١٣:٠٠:٠٠+03:00
+
+Conclusion: `ofPattern` hard-codes `DecimalStyle.STANDARD` (ASCII
+digits) regardless of the default locale; only an explicit
+`.localizedBy(...)` switches digit sets. The missing `Locale` in
+`Timestamps.kt` is therefore NOT a bug - java.time differs from
+`SimpleDateFormat`/Darwin `DateFormatter` here, which is why the mac
+twin needs the pin and the android one doesn't. Also verified both
+test epoch constants map to their claimed UTC instants
+(1783764000000 = 2026-07-11T10:00:00Z, 1768471200000 =
+2026-01-15T10:00:00Z) via Python `datetime`.
