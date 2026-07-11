@@ -90,3 +90,41 @@ fraction of a small host's total RAM. Revisit with an epoch column + index
 (to push range filtering into SQL instead of scanning + parsing every row
 in the table) if a deployment target's memory budget is tight enough for
 this to matter before a redesign is otherwise warranted.
+
+## 2026-07-11 - Android Task 1 scaffold: wrapper provenance and test-config probes (quality review)
+
+Three empirical checks run against the committed gradle scaffold
+(commit 2d0c2f8), each in a scratchpad copy so the shared worktree
+stayed untouched.
+
+**Wrapper provenance.** The committed `gradle-wrapper.properties`
+contains `retries=0` and `retryBackOffMs=500`, which Gradle 8.9 does not
+generate. Cause: the system Gradle is 9.6.1, and `gradle wrapper
+--gradle-version 8.9` (plan Task 1 Step 4) emits the *generating*
+version's wrapper files with only `distributionUrl` pointing at 8.9.
+Verified integrity by generating a reference wrapper in a scratch
+project with the same system Gradle: committed jar sha256
+`497c8c2a7e50...` is byte-identical to pristine 9.6.1 output, and both
+`gradlew` scripts diff clean. So the wrapper is authentic, just
+9.6.1-flavored; the extra keys are 9.6.1 generation defaults. Expect
+churn (keys dropped, jar replaced) if `./gradlew wrapper` is ever run,
+since 8.9 will regenerate its own files.
+
+**Robolectric without `isIncludeAndroidResources`.** The scaffold
+declares Robolectric but no `testOptions` block. Probed whether Task 5's
+planned StoreTest pattern (`RuntimeEnvironment.getApplication()` +
+framework sqlite, in-memory db, `@Config(sdk = [34])`) needs the
+standard `unitTests.isIncludeAndroidResources = true`: a probe test with
+exactly that shape passed without it. No android *resources* are
+touched, so the option genuinely isn't needed; adding it would be cargo
+cult. (Robolectric's first run downloaded android-all as the plan
+predicts.)
+
+**`android.useAndroidX=true` comment accuracy.** Flipped the flag to
+`false` and re-ran tests: build fails in
+`:app:compileDebugUnitTestKotlin` with AGP's "Configuration
+`:app:debugUnitTestRuntimeClasspath` contains AndroidX dependencies, but
+the `android.useAndroidX` property is not enabled", listing Robolectric's
+androidx.test transitive deps - exactly what the gradle.properties
+comment claims. The flag is load-bearing for tests despite the
+zero-androidx runtime.
