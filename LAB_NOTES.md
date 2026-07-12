@@ -557,3 +557,36 @@ behind. A subsequent forced run synced 0. Conclusion: constraint
 satisfaction works as an upload trigger as designed; device-only
 enforcement means job-scheduling changes always need one on-device
 smoke pass.
+
+## 2026-07-12 - Pixel jobs starved by the RARE standby bucket: quota, not code
+
+User was on the phone ~1h but the timeline showed nothing since
+morning. On-device diagnosis:
+
+- prefs: last sampler run 08:17 (synced 22 then); nothing after.
+- `dumpsys jobscheduler` for job 1: enqueued -6h50m, overdue by -6h23m,
+  `Ready: false`, `Unsatisfied constraints: WITHIN_QUOTA`,
+  `Standby bucket: RARE` (`am get-standby-bucket dev.areyouup` -> 40).
+
+Root cause: the app is never "used" in Android's eyes - no
+notification, no foreground service, activity almost never opened -
+which is exactly the ADR-0007 invisible design. After ~a day without
+launches Android demoted it ACTIVE -> ... -> RARE, and RARE apps get a
+tiny background job quota (WITHIN_QUOTA is a soft constraint the
+periodic jobs then sit behind for hours). It had worked the first days
+only because constant install/launch activity kept the bucket ACTIVE.
+
+Nothing was lost: forcing runs + opening the app (which bumps the
+bucket temporarily) replayed the system event log from the cursor and
+synced 247 samples covering the whole starved window - retrospective
+synthesis absorbed the outage exactly as designed.
+
+Also observed: `cmd jobscheduler run -f` at 15:08 printed "Running job
+[FORCED]" but nothing executed (no process start, prefs unchanged);
+after `am start` of the activity the same command ran fine. Forced runs
+appear unreliable while the app process is dead and the bucket is RARE
+- prefer opening the app first when debugging.
+
+Fix: Settings > Apps > are-you-up > Battery > Unrestricted (power
+allowlist exempts the app from standby quota). The trade-off is
+acceptable for a personal instrument whose jobs run seconds per cycle.
