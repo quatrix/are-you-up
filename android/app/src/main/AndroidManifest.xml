@@ -15,6 +15,12 @@
     <!-- Required by JobInfo.setPersisted(); no boot receiver exists or
          is ever added (ADR-0007). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the in-app button raise the "ignore battery optimizations"
+         dialog. Without the exemption, standby buckets quota-starve the
+         15-min jobs once the app is never opened (LAB_NOTES 2026-07-12).
+         Play would flag this permission; irrelevant for a sideloaded
+         personal app. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- usesCleartextTraffic: the server is plain http inside the
          tailnet (no TLS by design; the tailnet is the perimeter). -->

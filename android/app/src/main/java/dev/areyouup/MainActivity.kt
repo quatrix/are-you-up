@@ -5,10 +5,13 @@ import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.util.Log
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Switch
@@ -38,6 +41,18 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.grant).setOnClickListener {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+        findViewById<Button>(R.id.battery).setOnClickListener {
+            // System dialog putting us on the power allowlist, which
+            // exempts the jobs from the standby-bucket quota (LAB_NOTES
+            // 2026-07-12); REQUEST_IGNORE_BATTERY_OPTIMIZATIONS in the
+            // manifest is what makes this intent legal.
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
         }
         findViewById<Button>(R.id.dump).setOnClickListener { dumpRecentEvents() }
         findViewById<Button>(R.id.sync_now).setOnClickListener { button ->
@@ -75,8 +90,26 @@ class MainActivity : Activity() {
         } finally {
             store.close()
         }
+        // The standby bucket decides the background-job quota; RARE
+        // starves the 15-min jobs for hours. The power-allowlist
+        // exemption ("unrestricted" battery) is the fix, so surface both
+        // here instead of needing dumpsys (LAB_NOTES 2026-07-12).
+        val unrestricted = getSystemService(PowerManager::class.java)
+            .isIgnoringBatteryOptimizations(packageName)
+        val bucket = when (val b =
+            getSystemService(UsageStatsManager::class.java).appStandbyBucket) {
+            UsageStatsManager.STANDBY_BUCKET_ACTIVE -> "active"
+            UsageStatsManager.STANDBY_BUCKET_WORKING_SET -> "working set"
+            UsageStatsManager.STANDBY_BUCKET_FREQUENT -> "frequent"
+            UsageStatsManager.STANDBY_BUCKET_RARE -> "RARE"
+            UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> "RESTRICTED"
+            else -> "?($b)"
+        }
+        findViewById<Button>(R.id.battery).visibility =
+            if (unrestricted) View.GONE else View.VISIBLE
         findViewById<TextView>(R.id.status).text = """
             usage access: ${if (hasUsageAccess()) "granted" else "NOT GRANTED"}
+            battery: ${if (unrestricted) "unrestricted" else "optimized, bucket $bucket - jobs can starve"}
             last run: ${prefs.lastRunSummary}
             last sync: ${prefs.lastSyncSummary}
             last successful sync: ${prefs.lastSyncTs}

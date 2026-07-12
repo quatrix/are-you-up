@@ -149,6 +149,13 @@ first launch; blank means the job buffers without syncing), `source`
 `MainActivity`, one plain XML screen, is the only UI:
 
 - Usage Access status, with a button opening the Settings grant page.
+- Battery/standby-bucket status (added 2026-07-12): Android demotes a
+  never-opened, notification-less app to the RARE bucket, whose job
+  quota starves the 15-min jobs for hours. The status line shows the
+  bucket and whether the power-allowlist exemption is granted; an
+  "Allow unrestricted battery" button (hidden once granted) raises the
+  system exemption dialog via
+  `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
 - Last sampler run (events seen, samples synthesized), last sync
   attempt and its outcome, last successful sync time, unsynced row
   count.

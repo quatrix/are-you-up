@@ -31,12 +31,15 @@ footprint and no notification. Design:
    then Settings > System > Developer options > enable "USB debugging".
 2. Plug the phone in over USB; accept the "Allow USB debugging?" prompt.
 3. `make run` (installs and launches).
-4. In the app: tap "Grant usage access" and enable are-you-up; type
-   the backend's URL (e.g. `http://<tailnet-ip>:8080` - there is
-   deliberately no committed default) and tap "Save server url"; done.
-   The job is now armed and survives reboots - the cable is no longer
-   needed. Until the URL is set, samples buffer locally and the status
-   line says "server url not configured".
+4. In the app: tap "Grant usage access" and enable are-you-up; tap
+   "Allow unrestricted battery" and confirm (without the exemption,
+   Android's standby buckets quota-starve the jobs for hours once the
+   app hasn't been opened for a day - the status line warns when this
+   is the case); type the backend's URL (e.g. `http://<tailnet-ip>:8080`
+   - there is deliberately no committed default) and tap "Save server
+   url"; done. The jobs are now armed and survive reboots - the cable
+   is no longer needed. Until the URL is set, samples buffer locally
+   and the status line says "server url not configured".
 
 ## Operate
 
@@ -54,9 +57,9 @@ often as possible: Settings > Network & internet > VPN > Tailscale >
 **Always-on VPN**, and Settings > Apps > Tailscale > Battery >
 **Unrestricted**.
 
-The app screen shows the usage-access state, the last sampler run, the
-last sync attempt, the last successful sync, and the unsynced sample
-count. "Sync now"
+The app screen shows the usage-access state, the battery/standby-bucket
+state, the last sampler run, the last sync attempt, the last successful
+sync, and the unsynced sample count. "Sync now"
 runs one job cycle immediately (useful right after changing the server
 URL instead of waiting for the 15-min tick). "Paused" stops
 sample synthesis (the paused span becomes a permanent gap); syncing of
@@ -80,6 +83,11 @@ minute.
   app's status line says so too).
 - Job never runs: open the app once - force-stop parks persisted jobs
   until the next launch.
+- Data lags by hours even though the phone was in use: the app fell
+  into a low standby bucket and its job quota ran out (the status line
+  reads "battery: optimized, bucket RARE - jobs can starve"). Tap
+  "Allow unrestricted battery". Nothing is lost meanwhile - the next
+  run replays the system event log from the cursor.
 - `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: the APK was built on a machine
   with a different debug keystore. `make uninstall` first
   (buffered samples are lost; anything synced is already on the server).

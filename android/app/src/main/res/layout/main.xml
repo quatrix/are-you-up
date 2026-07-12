@@ -43,6 +43,12 @@
         android:text="Grant usage access" />
 
     <Button
+        android:id="@+id/battery"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Allow unrestricted battery" />
+
+    <Button
         android:id="@+id/dump"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
