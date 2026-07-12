@@ -590,3 +590,27 @@ appear unreliable while the app process is dead and the bucket is RARE
 Fix: Settings > Apps > are-you-up > Battery > Unrestricted (power
 allowlist exempts the app from standby quota). The trade-off is
 acceptable for a personal instrument whose jobs run seconds per cycle.
+
+## 2026-07-12 - Battery profile of the android app: 0.317 mAh over 17h (0.017% of device drain)
+
+`adb shell dumpsys batterystats dev.areyouup`, stats window "since last
+charge" = 17h 9m on battery, device total computed drain 1895 mAh
+(capacity 3766):
+
+    UID u0a135: 0.317 mAh   fg: 0.017 (1m 9s)  bg: 0.218 (21m 6s)
+                            cached: 0.081 (16h 25m)
+    Total cpu time: u=1s 63ms s=712ms          (1.8s CPU in 17 hours)
+    Job dev.areyouup/.SampleJob: 3s 4ms realtime (10 times)
+    Wi-Fi network: 8.01KB received, 20.03KB sent
+
+Context, same window: youtube 156 mAh, whatsapp 74.1 mAh, google play
+services 17.8 mAh, systemui 13.5 mAh. are-you-up sits ~40-500x below
+the busy apps, at 0.017% of total drain; the process spends 96% of the
+window cached, costing nothing.
+
+Caveat: this window included the RARE-bucket starvation (only 10 job
+runs). Per-run cost ~0.022 mAh (bg 0.218 / 10) and ~0.3s runtime, so
+full unrestricted cadence (~96 sampler + ~50 VPN-gated sync runs/day)
+extrapolates to ~3 mAh/day, ~0.08% of the battery per day. Conclusion:
+the ADR-0007 "don't feel it running" budget holds by 2-3 orders of
+magnitude; no optimization warranted.
