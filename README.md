@@ -5,6 +5,8 @@ usage on the pixel) and serves it as
 active/idle intervals, as a correction signal for whoop's time-in-bed
 detection (sofa laptop sessions are not bed time).
 
+![the timeline page: one 24h lane group per day showing awake time per device](images/frontend.png)
+
 ## How it works
 
 ```
