@@ -195,6 +195,19 @@ and hover tooltips. All bridging/annotation is display-only - the API
 returns exact intervals. Served same-origin so no CORS surface exists.
 
 ```
+GET /openapi.json -> 200 application/json
+GET /docs         -> 200 text/html
+```
+
+API reference (added 2026-08-20): the OpenAPI 3.1 document is generated
+at runtime from the same Rust types the handlers serialize (utoipa
+derives + `#[utoipa::path]` annotations), so it cannot drift from the
+wire format without failing to compile; this markdown spec remains the
+design source of truth (ADR-0011). `/docs` renders it with a vendored
+RapiDoc single file - same no-CDN, embedded-in-binary treatment as the
+timeline page.
+
+```
 GET /healthz -> 200 "ok"
 ```
 

@@ -599,6 +599,39 @@ async fn events_validates_params() {
 }
 
 #[tokio::test]
+async fn openapi_document_covers_the_api() {
+    let app = test_app();
+    let (status, body) = send(&app, "GET", "/openapi.json", None).await;
+    assert_eq!(status, StatusCode::OK);
+    for path in ["/v1/samples", "/v1/intervals", "/v1/events"] {
+        assert!(body["paths"][path].is_object(), "missing {path}: {body}");
+    }
+    // Generated from the handler types: spot-check one property so a stray
+    // field rename in code shows up here.
+    assert!(
+        body["components"]["schemas"]["EventRequest"]["properties"]["event_name"].is_object(),
+        "EventRequest schema missing event_name"
+    );
+}
+
+#[tokio::test]
+async fn docs_page_and_vendored_viewer_are_served() {
+    let app = test_app();
+    let (status, body) = send(&app, "GET", "/docs", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.as_str().is_some_and(|html| html.contains("<rapi-doc")),
+        "body: {body}"
+    );
+    let (status, js) = send(&app, "GET", "/docs/rapidoc-min.js", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        js.as_str().is_some_and(|s| s.contains("RapiDoc")),
+        "vendored viewer should be served from the binary"
+    );
+}
+
+#[tokio::test]
 async fn root_serves_the_timeline_page() {
     let app = test_app();
     let (status, body) = send(&app, "GET", "/", None).await;

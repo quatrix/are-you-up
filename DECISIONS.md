@@ -221,3 +221,35 @@ range-filtering stays forbidden), which is trivially fine at
 human-event volume. Drawback: server-stamped `ts` carries the server's
 UTC offset, not the phone's, when the caller omits it - acceptable
 since server and user share a timezone; callers who care send `ts`.
+
+## 0011 - OpenAPI is generated from handler types; viewer is vendored
+
+**Date:** 2026-08-20 | **Status:** accepted
+**Context:** The user wants an OpenAPI/Swagger surface on the backend.
+The API contract already lives in the markdown design spec, so any
+machine-readable mirror risks becoming a second source of truth that
+silently drifts.
+**Decision:** Generate the document at runtime from the very types the
+handlers deserialize/serialize: utoipa `ToSchema` derives plus
+`#[utoipa::path]` annotations, served at `/openapi.json`. This forced
+the handlers' ad-hoc `serde_json::json!` responses into typed
+`Serialize` structs - an improvement on its own, and the mechanism that
+makes drift a compile error rather than a review-time hope. The
+markdown spec stays the design source of truth; the generated document
+is a projection of the code. `/docs` renders it with RapiDoc vendored
+as a single file into `static/vendor/` and embedded in the binary,
+matching the timeline page's no-CDN, copy-one-file deployment.
+**Alternatives:** Hand-written openapi.json - rejected by user: the
+types already exist in Rust, maintaining a parallel document by hand is
+drift waiting to happen. utoipa-swagger-ui - rejected: pulls extra
+crates and fetches the swagger-ui bundle in build.rs (build-time
+network, against the reproducibility stance of ADR-0005), all to serve
+a viewer that one vendored file provides. CDN-loaded viewer - rejected:
+the timeline page deliberately established no-CDN, self-contained
+deployment.
+**Consequences:** Docs cannot lag the wire format; a new endpoint
+missing its annotation is visible in one place (`ApiDoc::paths`).
+Costs: one proc-macro dependency tree (utoipa + utoipa-gen), macro
+annotations in lib.rs, and an 863K minified RapiDoc blob checked into
+the repo (with its license file) that needs a manual bump if the viewer
+ever needs updating.

@@ -11,9 +11,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, warn};
+use utoipa::{OpenApi, ToSchema};
 
 pub mod intervals;
 
@@ -94,6 +95,9 @@ pub fn app(conn: Connection) -> Router {
         .route("/v1/samples", post(post_samples))
         .route("/v1/intervals", get(get_intervals))
         .route("/v1/events", post(post_event).get(get_events))
+        .route("/openapi.json", get(openapi_json))
+        .route("/docs", get(docs))
+        .route("/docs/rapidoc-min.js", get(rapidoc_js))
         // Per-request logging (method, path, status, latency) at debug level;
         // enable with RUST_LOG=debug or RUST_LOG=tower_http=debug.
         .layer(TraceLayer::new_for_http())
@@ -106,6 +110,41 @@ pub fn app(conn: Connection) -> Router {
 /// machinery exists or is needed; tailscale remains the only perimeter.
 async fn timeline() -> axum::response::Html<&'static str> {
     axum::response::Html(include_str!("../static/timeline.html"))
+}
+
+/// The API reference. The OpenAPI document is generated from the very types
+/// the handlers deserialize/serialize (utoipa derives plus the
+/// `#[utoipa::path]` annotations on each handler), so it cannot drift from
+/// the wire format without failing to compile. New endpoints must carry the
+/// annotation and be registered in `ApiDoc`'s `paths(...)` list.
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "are-you-up",
+        description = "Personal activity tracker feeding whoop sleep-detection \
+                       correction. All timestamps are RFC 3339 strings carrying the \
+                       device's local UTC offset (ADR-0004); percent-encode '+' \
+                       as %2B in query parameters."
+    ),
+    paths(post_samples, get_intervals, post_event, get_events)
+)]
+struct ApiDoc;
+
+async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+/// /docs renders /openapi.json with RapiDoc, vendored into the binary - the
+/// same no-CDN, copy-one-file deployment treatment as the timeline page.
+async fn docs() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../static/docs.html"))
+}
+
+async fn rapidoc_js() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/javascript")],
+        include_str!("../static/vendor/rapidoc-min.js"),
+    )
 }
 
 /// Uniform JSON error body. Client mistakes are always 4xx, never 500.
@@ -121,21 +160,51 @@ fn error_response(status: StatusCode, message: String) -> Response {
     } else {
         debug!(%status, message, "request rejected");
     }
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
+    (status, Json(ApiError { error: message })).into_response()
 }
 
-#[derive(Deserialize)]
+/// Uniform body of every 4xx/5xx the handlers produce.
+#[derive(Serialize, ToSchema)]
+struct ApiError {
+    /// Human-readable reason.
+    error: String,
+}
+
+#[derive(Deserialize, ToSchema)]
 struct SamplesRequest {
+    /// Free-form device name; adding a device never requires a schema change.
+    #[schema(example = "macbook")]
     source: String,
     samples: Vec<SampleIn>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct SampleIn {
+    /// RFC 3339 with the device's local UTC offset (ADR-0004).
+    #[schema(example = "2026-07-10T23:41:03+03:00")]
     ts: String,
+    /// Wall-clock seconds since last input on the device.
+    #[schema(minimum = 0)]
     idle_s: i64,
 }
 
+#[derive(Serialize, ToSchema)]
+struct SamplesAck {
+    /// Count of stored samples. Clients must verify it equals the batch size
+    /// before marking rows synced; a bare 200 is not an ack (contract).
+    accepted: usize,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/samples",
+    request_body = SamplesRequest,
+    responses(
+        (status = 200, description = "Whole batch stored, all-or-nothing; \
+         upsert on (source, ts) makes retries idempotent", body = SamplesAck),
+        (status = 400, description = "Malformed payload; nothing stored", body = ApiError),
+    )
+)]
 async fn post_samples(
     State(state): State<AppState>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -195,7 +264,10 @@ async fn post_samples(
         accepted = req.samples.len(),
         "stored samples batch"
     );
-    Json(serde_json::json!({ "accepted": req.samples.len() })).into_response()
+    Json(SamplesAck {
+        accepted: req.samples.len(),
+    })
+    .into_response()
 }
 
 /// Parses the from/to range shared by /v1/intervals and /v1/events: both
@@ -225,12 +297,36 @@ fn parse_range(
     Ok((from, to))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct EventRequest {
+    /// Arbitrary non-empty label for what happened.
+    #[schema(example = "took pills")]
     event_name: String,
+    /// RFC 3339 with local UTC offset. Omit to have the server stamp its
+    /// local now (ADR-0010).
+    #[schema(example = "2026-08-20T09:12:00+03:00")]
     ts: Option<String>,
 }
 
+#[derive(Serialize, ToSchema)]
+struct EventAck {
+    accepted: usize,
+    /// The stored timestamp: echoes the request `ts`, or the server-stamped
+    /// now when the request omitted it.
+    #[schema(example = "2026-08-20T09:12:00+03:00")]
+    ts: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/events",
+    request_body = EventRequest,
+    responses(
+        (status = 200, description = "Event stored; upsert on (event_name, ts) \
+         makes retries idempotent", body = EventAck),
+        (status = 400, description = "Empty event_name or unparseable ts", body = ApiError),
+    )
+)]
 async fn post_event(
     State(state): State<AppState>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -280,7 +376,7 @@ async fn post_event(
         peer = %peer_ip(peer.map(|Extension(ConnectInfo(address))| address)),
         "stored event"
     );
-    Json(serde_json::json!({ "accepted": 1, "ts": ts })).into_response()
+    Json(EventAck { accepted: 1, ts }).into_response()
 }
 
 #[derive(Deserialize)]
@@ -289,6 +385,34 @@ struct EventsQuery {
     to: Option<String>,
 }
 
+#[derive(Serialize, ToSchema)]
+struct EventOut {
+    #[schema(example = "took pills")]
+    event_name: String,
+    #[schema(example = "2026-08-20T09:12:00+03:00")]
+    ts: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct EventsResponse {
+    /// Sorted by instant, event_name as tiebreak.
+    events: Vec<EventOut>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/events",
+    params(
+        ("from" = String, Query, description = "RFC 3339, inclusive; \
+          percent-encode '+' as %2B", example = "2026-08-20T00:00:00+03:00"),
+        ("to" = String, Query, description = "RFC 3339, exclusive \
+          (from <= ts < to)", example = "2026-08-21T00:00:00+03:00"),
+    ),
+    responses(
+        (status = 200, description = "Events in range", body = EventsResponse),
+        (status = 400, description = "Missing or unparseable from/to", body = ApiError),
+    )
+)]
 async fn get_events(
     State(state): State<AppState>,
     query: Result<Query<EventsQuery>, QueryRejection>,
@@ -346,12 +470,12 @@ async fn get_events(
     // simultaneous events come back in a deterministic order.
     events.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-    let out: Vec<serde_json::Value> = events
-        .iter()
-        .map(|(_, event_name, ts)| serde_json::json!({ "event_name": event_name, "ts": ts }))
+    let events: Vec<EventOut> = events
+        .into_iter()
+        .map(|(_, event_name, ts)| EventOut { event_name, ts })
         .collect();
-    debug!(from = %from, to = %to, events = out.len(), "listed events");
-    Json(serde_json::json!({ "events": out })).into_response()
+    debug!(from = %from, to = %to, events = events.len(), "listed events");
+    Json(EventsResponse { events }).into_response()
 }
 
 #[derive(Deserialize)]
@@ -363,6 +487,67 @@ struct IntervalsQuery {
     consolidate: Option<String>,
 }
 
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+enum IntervalState {
+    Active,
+    Idle,
+}
+
+#[derive(Serialize, ToSchema)]
+struct RawInterval {
+    #[schema(example = "macbook")]
+    source: String,
+    #[schema(example = "2026-07-10T22:00:12+03:00")]
+    start: String,
+    #[schema(example = "2026-07-10T23:15:42+03:00")]
+    end: String,
+    state: IntervalState,
+}
+
+#[derive(Serialize, ToSchema)]
+struct ConsolidatedInterval {
+    #[schema(example = "2026-07-10T22:00:12+03:00")]
+    start: String,
+    #[schema(example = "2026-07-10T22:31:42+03:00")]
+    end: String,
+    /// Devices active during this piece; boundaries split wherever this
+    /// set changes. Sorted.
+    sources: Vec<String>,
+}
+
+/// Two shapes behind one endpoint: `consolidate=true` returns the
+/// cross-source awake-evidence view (active time only, no state field),
+/// otherwise per-source active/idle runs.
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+enum IntervalsResponse {
+    Raw { intervals: Vec<RawInterval> },
+    Consolidated { intervals: Vec<ConsolidatedInterval> },
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/intervals",
+    params(
+        ("from" = String, Query, description = "RFC 3339, inclusive; \
+          percent-encode '+' as %2B", example = "2026-07-10T00:00:00+03:00"),
+        ("to" = String, Query, description = "RFC 3339, exclusive \
+          (from <= ts < to)", example = "2026-07-11T00:00:00+03:00"),
+        ("threshold_s" = Option<i64>, Query, description = "A sample is active \
+          when idle_s < threshold_s; positive, default 900"),
+        ("source" = Option<String>, Query, description = "Restrict to one \
+          device; default all, derived per source"),
+        ("consolidate" = Option<String>, Query, description = "Exactly \
+          \"true\" or \"false\" (default). true returns the cross-source \
+          awake-evidence shape"),
+    ),
+    responses(
+        (status = 200, description = "Derived intervals; time not covered by \
+         samples is absent, consumers treat it as no-signal", body = IntervalsResponse),
+        (status = 400, description = "Missing/unparseable parameters", body = ApiError),
+    )
+)]
 async fn get_intervals(
     State(state): State<AppState>,
     query: Result<Query<IntervalsQuery>, QueryRejection>,
@@ -459,36 +644,40 @@ async fn get_intervals(
         })
         .collect();
 
-    let out: Vec<serde_json::Value> = if consolidate {
+    let response = if consolidate {
         // The cross-source awake-evidence view: active time only, exact
         // source set per piece, no state field (see the spec's API section).
-        intervals::consolidate(&derived)
-            .into_iter()
-            .map(|iv| {
-                serde_json::json!({
-                    "start": iv.start.to_rfc3339(),
-                    "end": iv.end.to_rfc3339(),
-                    "sources": iv.sources,
+        IntervalsResponse::Consolidated {
+            intervals: intervals::consolidate(&derived)
+                .into_iter()
+                .map(|iv| ConsolidatedInterval {
+                    start: iv.start.to_rfc3339(),
+                    end: iv.end.to_rfc3339(),
+                    sources: iv.sources,
                 })
-            })
-            .collect()
+                .collect(),
+        }
     } else {
-        derived
-            .iter()
-            .flat_map(|(source, ivs)| {
-                ivs.iter().map(move |iv| {
-                    serde_json::json!({
-                        "source": source,
-                        "start": iv.start.to_rfc3339(),
-                        "end": iv.end.to_rfc3339(),
-                        "state": match iv.state {
-                            intervals::State::Active => "active",
-                            intervals::State::Idle => "idle",
+        IntervalsResponse::Raw {
+            intervals: derived
+                .iter()
+                .flat_map(|(source, ivs)| {
+                    ivs.iter().map(move |iv| RawInterval {
+                        source: source.clone(),
+                        start: iv.start.to_rfc3339(),
+                        end: iv.end.to_rfc3339(),
+                        state: match iv.state {
+                            intervals::State::Active => IntervalState::Active,
+                            intervals::State::Idle => IntervalState::Idle,
                         },
                     })
                 })
-            })
-            .collect()
+                .collect(),
+        }
+    };
+    let count = match &response {
+        IntervalsResponse::Raw { intervals } => intervals.len(),
+        IntervalsResponse::Consolidated { intervals } => intervals.len(),
     };
     debug!(
         from = %from,
@@ -496,8 +685,8 @@ async fn get_intervals(
         threshold_s,
         source = q.source.as_deref().unwrap_or("<all>"),
         consolidate,
-        intervals = out.len(),
+        intervals = count,
         "derived intervals"
     );
-    Json(serde_json::json!({ "intervals": out })).into_response()
+    Json(response).into_response()
 }

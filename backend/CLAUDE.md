@@ -25,6 +25,11 @@ timestamps, 0005 toolchain pin).
 - `src/lib.rs` - open_db, router, handlers, validation. Handlers
   hand-parse bodies/queries so every client mistake returns a uniform
   JSON 400 (axum's extractors would 422/plain-text some of them).
+  OpenAPI (`/openapi.json`, rendered at `/docs`) is generated from the
+  handlers' request/response types via utoipa: every endpoint carries a
+  `#[utoipa::path]` annotation and is registered in `ApiDoc`'s
+  `paths(...)`; responses are typed `Serialize` structs, never ad-hoc
+  `json!`, so docs and wire format cannot drift.
 - `src/intervals.rs` - pure derivation logic, the only real logic here;
   fully unit-tested, no I/O.
 
