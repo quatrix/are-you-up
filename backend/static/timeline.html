@@ -142,6 +142,15 @@
   .day .total b { display: block; font-size: 14px; color: var(--awake); font-weight: 600; }
   .day .total .by { font-size: 10px; color: var(--faint); }
 
+  /* ---- events list ---------------------------------------------------- */
+  #events { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px; }
+  #events .head {
+    font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 8px;
+  }
+  .event { display: flex; gap: 14px; padding: 2px 0; }
+  .event .ets { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   /* ---- tooltip ------------------------------------------------------- */
   #tip {
     position: fixed; z-index: 10; display: none; pointer-events: none;
@@ -173,6 +182,7 @@
 
 <div id="axis" class="cols"><div></div><div class="scale" id="scale"></div><div></div></div>
 <div id="days"></div>
+<div id="events"></div>
 <div id="tip"></div>
 
 <script>
@@ -368,6 +378,27 @@ function render(fromDate, toDate, intervals) {
     `${dayCount} day${dayCount > 1 ? "s" : ""} · awake <b>${fmtDur(grandTotal)}</b>`;
 }
 
+// event_name is arbitrary user text: build rows with textContent, never
+// innerHTML, so nothing in it can execute or break the markup.
+function renderEvents(events) {
+  const box = $("events");
+  box.innerHTML = "";
+  if (!events.length) return;
+  const head = el("div", "head");
+  head.textContent = `events · ${events.length}`;
+  box.appendChild(head);
+  for (const ev of events) {
+    const t = new Date(ev.ts).getTime();
+    const row = el("div", "event");
+    const when = el("span", "ets");
+    when.textContent = `${fmtDate(new Date(t)).slice(5)} ${hm(t)}`;
+    const name = el("span");
+    name.textContent = ev.event_name;
+    row.append(when, name);
+    box.appendChild(row);
+  }
+}
+
 // ---- tooltip ----------------------------------------------------------------
 
 const tip = $("tip");
@@ -410,17 +441,24 @@ async function load() {
     err.style.display = "block";
     return;
   }
-  const qs = new URLSearchParams({
+  const range = {
     from: localMidnightRfc(fromDate),
     to: localMidnightRfc(addDays(toDate, 1)),   // half-open [from, to+1d)
-    consolidate: "true",
-  });
+  };
+  const qs = new URLSearchParams({ ...range, consolidate: "true" });
   try {
-    const res = await fetch("/v1/intervals?" + qs);
-    if (!res.ok) throw new Error(`server returned ${res.status}: ${await res.text()}`);
-    render(fromDate, toDate, (await res.json()).intervals);
+    const [ivRes, evRes] = await Promise.all([
+      fetch("/v1/intervals?" + qs),
+      fetch("/v1/events?" + new URLSearchParams(range)),
+    ]);
+    for (const res of [ivRes, evRes]) {
+      if (!res.ok) throw new Error(`server returned ${res.status}: ${await res.text()}`);
+    }
+    render(fromDate, toDate, (await ivRes.json()).intervals);
+    renderEvents((await evRes.json()).events);
   } catch (e) {
     $("days").innerHTML = "";
+    $("events").innerHTML = "";
     err.textContent = "failed to load: " + e.message;
     err.style.display = "block";
   }

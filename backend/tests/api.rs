@@ -448,6 +448,156 @@ async fn consolidate_composes_with_source_filter() {
     );
 }
 
+// ----- events: the free-form point-in-time log -----
+
+#[tokio::test]
+async fn post_event_stores_and_get_returns_it() {
+    let app = test_app();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/events",
+        Some(json!({"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["accepted"], 1);
+    assert_eq!(body["ts"], "2026-07-10T22:05:00+03:00");
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["events"],
+        json!([{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}])
+    );
+}
+
+#[tokio::test]
+async fn post_event_without_ts_stamps_server_time() {
+    let app = test_app();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/events",
+        Some(json!({"event_name": "took pills"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["accepted"], 1);
+    assert!(body["ts"].is_string(), "body: {body}");
+
+    // The stamped event coming back through GET proves the server-generated
+    // ts parses as RFC 3339: get_events silently-but-loudly skips rows whose
+    // ts does not parse.
+    let (status, listed) = send(
+        &app,
+        "GET",
+        "/v1/events?from=2000-01-01T00:00:00%2B00:00&to=2100-01-01T00:00:00%2B00:00",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listed["events"],
+        json!([{"event_name": "took pills", "ts": body["ts"]}])
+    );
+}
+
+#[tokio::test]
+async fn post_event_is_idempotent() {
+    let app = test_app();
+    let event = json!({"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"});
+    let (first, _) = send(&app, "POST", "/v1/events", Some(event.clone())).await;
+    let (second, _) = send(&app, "POST", "/v1/events", Some(event)).await;
+    assert_eq!(first, StatusCode::OK);
+    assert_eq!(second, StatusCode::OK);
+
+    let (_, body) = send(
+        &app,
+        "GET",
+        "/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00",
+        None,
+    )
+    .await;
+    assert_eq!(
+        body["events"].as_array().map(Vec::len),
+        Some(1),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn post_event_rejects_bad_input_with_400_and_reason() {
+    let app = test_app();
+    let cases: Vec<Value> = vec![
+        json!({"event_name": ""}),
+        json!({"event_name": "   "}),
+        json!({"event_name": "took pills", "ts": "not a timestamp"}),
+        json!({"ts": "2026-07-10T22:05:00+03:00"}),
+    ];
+    for case in cases {
+        let (status, body) = send(&app, "POST", "/v1/events", Some(case.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "case: {case}");
+        assert!(body["error"].is_string(), "case: {case}, body: {body}");
+    }
+}
+
+#[tokio::test]
+async fn events_range_is_half_open_and_sorted_by_instant() {
+    let app = test_app();
+    // Inserted out of order; the one at `to` must be excluded (from <= ts < to).
+    for (name, ts) in [
+        ("lunch", "2026-07-10T22:30:00+03:00"),
+        ("took pills", "2026-07-10T22:05:00+03:00"),
+        ("bedtime", "2026-07-10T23:00:00+03:00"),
+    ] {
+        let (status, _) = send(
+            &app,
+            "POST",
+            "/v1/events",
+            Some(json!({"event_name": name, "ts": ts})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["events"],
+        json!([
+            {"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"},
+            {"event_name": "lunch", "ts": "2026-07-10T22:30:00+03:00"},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn events_validates_params() {
+    let app = test_app();
+    let cases = [
+        "/v1/events",
+        "/v1/events?from=2026-07-10T22:00:00%2B03:00",
+        "/v1/events?from=nope&to=2026-07-10T23:00:00%2B03:00",
+    ];
+    for uri in cases {
+        let (status, body) = send(&app, "GET", uri, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "uri: {uri}");
+        assert!(body["error"].is_string(), "uri: {uri}, body: {body}");
+    }
+}
+
 #[tokio::test]
 async fn root_serves_the_timeline_page() {
     let app = test_app();

@@ -190,3 +190,34 @@ Costs: if tailscale is off for days, nothing syncs until it returns
 (intended: there is no other route to the server), and the status
 screen needs two lines (sampler summary and sync summary) instead of
 one.
+
+## 0010 - Events are a separate free-form log; ts optional, server-stamped
+
+**Date:** 2026-08-20 | **Status:** accepted
+**Context:** The user wants to log point-in-time events (e.g. "took
+pills") and see them on the timeline next to the activity data. Events
+are not activity: they carry no idle_s, have no source device, and must
+never influence interval derivation.
+**Decision:** A separate `events(event_name TEXT, ts TEXT, PRIMARY
+KEY(event_name, ts))` table and endpoints `POST /v1/events` /
+`GET /v1/events?from&to`. `event_name` is free-form (same rationale as
+`source` in ADR-0001 era design: new kinds must never need a schema
+change). `ts` is optional on POST: when absent the server stamps its
+own local now - the one deviation from "the device stamps time",
+because events are logged as they happen from curl/phone shortcuts
+where typing an RFC 3339 instant is hostile, and "now" on the server is
+the honest answer at that moment. The response echoes the stored `ts`.
+Upsert on `(event_name, ts)` keeps retries idempotent, matching
+`/v1/samples`.
+**Alternatives:** A `samples`-shaped row with a magic source
+("event:pills") - rejected: it would pollute interval derivation and
+overload `idle_s` with a meaning it does not have. Required `ts` -
+rejected: pushes RFC 3339 generation onto every ad-hoc caller for no
+data-quality gain. A batch POST like samples - rejected (YAGNI): events
+arrive one at a time from a human.
+**Consequences:** Logging an event is one short curl. The GET follows
+the same full-scan-then-parse discipline as intervals (TEXT
+range-filtering stays forbidden), which is trivially fine at
+human-event volume. Drawback: server-stamped `ts` carries the server's
+UTC offset, not the phone's, when the caller omits it - acceptable
+since server and user share a timezone; callers who care send `ts`.

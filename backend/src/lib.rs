@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::DateTime;
+use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use rusqlite::Connection;
 use serde::Deserialize;
 use tower_http::trace::TraceLayer;
@@ -66,6 +66,15 @@ pub fn open_db(path: &str) -> Connection {
         [],
     )
     .expect("create samples table");
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS events (
+            event_name TEXT NOT NULL,
+            ts         TEXT NOT NULL,
+            PRIMARY KEY (event_name, ts)
+        )",
+        [],
+    )
+    .expect("create events table");
     debug!(path, journal_mode = mode, "database open");
     conn
 }
@@ -84,6 +93,7 @@ pub fn app(conn: Connection) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/samples", post(post_samples))
         .route("/v1/intervals", get(get_intervals))
+        .route("/v1/events", post(post_event).get(get_events))
         // Per-request logging (method, path, status, latency) at debug level;
         // enable with RUST_LOG=debug or RUST_LOG=tower_http=debug.
         .layer(TraceLayer::new_for_http())
@@ -188,6 +198,162 @@ async fn post_samples(
     Json(serde_json::json!({ "accepted": req.samples.len() })).into_response()
 }
 
+/// Parses the from/to range shared by /v1/intervals and /v1/events: both
+/// required, both RFC 3339. Err carries the ready-to-return 400 response.
+fn parse_range(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), Response> {
+    let (Some(from_raw), Some(to_raw)) = (from, to) else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "from and to are required (RFC 3339; percent-encode '+' as %2B)".into(),
+        ));
+    };
+    let Ok(from) = DateTime::parse_from_rfc3339(from_raw) else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            format!("from is not RFC 3339 (percent-encode '+' as %2B): {from_raw:?}"),
+        ));
+    };
+    let Ok(to) = DateTime::parse_from_rfc3339(to_raw) else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            format!("to is not RFC 3339 (percent-encode '+' as %2B): {to_raw:?}"),
+        ));
+    };
+    Ok((from, to))
+}
+
+#[derive(Deserialize)]
+struct EventRequest {
+    event_name: String,
+    ts: Option<String>,
+}
+
+async fn post_event(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+    body: String,
+) -> Response {
+    // Hand-parsed for the same reason as post_samples: uniform JSON 400s.
+    let req: EventRequest = match serde_json::from_str(&body) {
+        Ok(req) => req,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
+    };
+    if req.event_name.trim().is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "event_name must be non-empty".into());
+    }
+    let ts = match req.ts {
+        Some(ts) => {
+            if DateTime::parse_from_rfc3339(&ts).is_err() {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("ts is not RFC 3339: {ts:?}"),
+                );
+            }
+            ts
+        }
+        // The one place the server originates a timestamp (ADR-0010): events
+        // are typically logged as they happen from curl/shortcuts, where
+        // typing an RFC 3339 instant is hostile. Still local offset,
+        // per ADR-0004; the response echoes it so the caller knows what
+        // was stored.
+        None => Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+    };
+
+    let conn = state
+        .db
+        .lock()
+        .expect("db mutex is never poisoned: no handler panics while holding it");
+    // Upsert on (event_name, ts) so retries after a lost response are harmless.
+    if let Err(e) = conn.execute(
+        "INSERT INTO events (event_name, ts) VALUES (?1, ?2)
+         ON CONFLICT (event_name, ts) DO NOTHING",
+        rusqlite::params![req.event_name, ts],
+    ) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}"));
+    }
+    debug!(
+        event_name = %req.event_name,
+        ts = %ts,
+        peer = %peer_ip(peer.map(|Extension(ConnectInfo(address))| address)),
+        "stored event"
+    );
+    Json(serde_json::json!({ "accepted": 1, "ts": ts })).into_response()
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+async fn get_events(
+    State(state): State<AppState>,
+    query: Result<Query<EventsQuery>, QueryRejection>,
+) -> Response {
+    let Query(q) = match query {
+        Ok(q) => q,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid query: {e}")),
+    };
+    let (from, to) = match parse_range(q.from.as_deref(), q.to.as_deref()) {
+        Ok(range) => range,
+        Err(response) => return response,
+    };
+
+    // Same full-scan-then-parse discipline as /v1/intervals: TEXT
+    // range-filtering mixed-offset RFC 3339 is unsound (see the ts invariant
+    // in CLAUDE.md), and this table is a handful of rows per day.
+    let rows: Vec<(String, String)> = {
+        let conn = state
+            .db
+            .lock()
+            .expect("db mutex is never poisoned: no handler panics while holding it");
+        let mut stmt = match conn.prepare("SELECT event_name, ts FROM events") {
+            Ok(stmt) => stmt,
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
+        };
+        let result = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .and_then(|mapped| mapped.collect());
+        match result {
+            Ok(rows) => rows,
+            Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
+        }
+    };
+
+    let mut skipped_unparseable_ts = 0u32;
+    let mut events: Vec<(DateTime<FixedOffset>, String, String)> = rows
+        .into_iter()
+        .filter_map(|(event_name, ts)| {
+            // Insert-time validation makes a bad row out-of-band edits, not a
+            // client mistake: skip it loudly rather than 500 the request.
+            let Ok(t) = DateTime::parse_from_rfc3339(&ts) else {
+                skipped_unparseable_ts += 1;
+                return None;
+            };
+            (t >= from && t < to).then_some((t, event_name, ts))
+        })
+        .collect();
+    if skipped_unparseable_ts > 0 {
+        warn!(
+            skipped = skipped_unparseable_ts,
+            "skipped rows with unparseable ts in /v1/events"
+        );
+    }
+    // Instant first (TEXT order lies across offsets), name as a tiebreak so
+    // simultaneous events come back in a deterministic order.
+    events.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let out: Vec<serde_json::Value> = events
+        .iter()
+        .map(|(_, event_name, ts)| serde_json::json!({ "event_name": event_name, "ts": ts }))
+        .collect();
+    debug!(from = %from, to = %to, events = out.len(), "listed events");
+    Json(serde_json::json!({ "events": out })).into_response()
+}
+
 #[derive(Deserialize)]
 struct IntervalsQuery {
     from: Option<String>,
@@ -208,23 +374,9 @@ async fn get_intervals(
         Ok(q) => q,
         Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid query: {e}")),
     };
-    let (Some(from_raw), Some(to_raw)) = (&q.from, &q.to) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "from and to are required (RFC 3339; percent-encode '+' as %2B)".into(),
-        );
-    };
-    let Ok(from) = DateTime::parse_from_rfc3339(from_raw) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            format!("from is not RFC 3339 (percent-encode '+' as %2B): {from_raw:?}"),
-        );
-    };
-    let Ok(to) = DateTime::parse_from_rfc3339(to_raw) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            format!("to is not RFC 3339 (percent-encode '+' as %2B): {to_raw:?}"),
-        );
+    let (from, to) = match parse_range(q.from.as_deref(), q.to.as_deref()) {
+        Ok(range) => range,
+        Err(response) => return response,
     };
     let threshold_s = q.threshold_s.unwrap_or(900);
     if threshold_s <= 0 {

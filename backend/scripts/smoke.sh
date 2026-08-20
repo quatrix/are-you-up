@@ -44,3 +44,17 @@ actual = [(i["state"], i["start"], i["end"]) for i in intervals]
 assert actual == expected, f"unexpected intervals: {actual}"
 print("smoke OK")
 EOF
+
+# Events: log one, read it back through the range query.
+ACK="$(curl -sf -X POST "$BASE/v1/events" -H 'content-type: application/json' -d '{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}')"
+EVENTS="$(curl -sf "$BASE/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00")"
+
+python3 - "$ACK" "$EVENTS" <<'EOF'
+import json, sys
+ack = json.loads(sys.argv[1])
+assert ack == {"accepted": 1, "ts": "2026-07-10T22:05:00+03:00"}, f"unexpected ack: {ack}"
+events = json.loads(sys.argv[2])["events"]
+expected = [{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}]
+assert events == expected, f"unexpected events: {events}"
+print("events smoke OK")
+EOF

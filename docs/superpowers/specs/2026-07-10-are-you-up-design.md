@@ -149,6 +149,36 @@ covered by no active interval is absent, as always. `threshold_s` and
 per-source activeness before merging, and `source` narrows the input
 set.
 
+Events (added 2026-08-20): a free-form point-in-time log (pills taken,
+etc.), separate from activity samples. An event is `(event_name, ts)`;
+it never participates in interval derivation.
+
+```
+POST /v1/events
+{"event_name": "took pills", "ts": "2026-08-20T09:12:00+03:00"}
+-> 200 {"accepted": 1, "ts": "2026-08-20T09:12:00+03:00"}
+```
+
+`event_name` is an arbitrary non-empty string (free-form like `source`;
+adding an event kind never requires a schema change). `ts` is optional:
+when absent the server stamps its own local now - the one place a
+timestamp originates on the server, still RFC 3339 with local offset
+per ADR-0004 (ADR-0010) - and the response echoes the stored `ts` so
+the caller knows what was logged. 400 with a reason on empty
+`event_name` or unparseable `ts`. Upsert on `(event_name, ts)`, so
+retries are idempotent.
+
+```
+GET /v1/events?from=...&to=...
+-> 200 {"events": [
+     {"event_name": "took pills", "ts": "2026-08-20T09:12:00+03:00"}, ...]}
+```
+
+`from`/`to` required (RFC 3339), same half-open `from <= ts < to` rule
+as `/v1/intervals`; events come back sorted by instant. The timeline
+page fetches this alongside the intervals and lists the range's events
+below the day rows.
+
 ```
 GET / -> 200 text/html
 ```
@@ -172,7 +202,8 @@ GET /healthz -> 200 "ok"
 
 axum + rusqlite behind a `Mutex<Connection>` (about 3 writes/minute; a pool
 would be decoration). Schema:
-`samples(source TEXT, ts TEXT, idle_s INTEGER, PRIMARY KEY(source, ts))`,
+`samples(source TEXT, ts TEXT, idle_s INTEGER, PRIMARY KEY(source, ts))`
+plus `events(event_name TEXT, ts TEXT, PRIMARY KEY(event_name, ts))`,
 WAL mode. Config via env: `ARE_YOU_UP_ADDR` (default `127.0.0.1:8080`;
 deployment sets the tailnet address) and `ARE_YOU_UP_DB` (default
 `./are-you-up.db`).
