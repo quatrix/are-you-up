@@ -253,3 +253,34 @@ Costs: one proc-macro dependency tree (utoipa + utoipa-gen), macro
 annotations in lib.rs, and an 863K minified RapiDoc blob checked into
 the repo (with its license file) that needs a manual bump if the viewer
 ever needs updating.
+
+## 0012 - Events get an integer id; first in-place schema migration
+
+**Date:** 2026-08-21 | **Status:** accepted
+**Context:** The UI needs to delete individual events, including exact
+duplicates of (event_name, ts) semantics-wise identical rows logged at
+different instants, so rows need a stable handle. The events table had
+already shipped (2026-08-20) with PRIMARY KEY (event_name, ts) and live
+data, so "recreate the db" stopped being an option.
+**Decision:** `events(id INTEGER PRIMARY KEY, event_name, ts,
+UNIQUE(event_name, ts))`. `id` is sqlite's rowid alias, auto-increments
+naturally, and is the handle for `DELETE /v1/events/{id}`; the old
+composite key lives on as UNIQUE so the POST upsert stays idempotent.
+`open_db` performs a one-time in-place rebuild (rename, create, copy,
+drop) when it finds a pre-id table - sqlite cannot add a PK via ALTER
+TABLE. This is the codebase's first migration, done as an ad-hoc
+idempotent step rather than a migration framework.
+**Alternatives:** Exposing the implicit rowid without a schema change -
+rejected: VACUUM renumbers rowids on tables without an INTEGER PRIMARY
+KEY alias, so ids could silently change under a handle-based DELETE.
+AUTOINCREMENT keyword - rejected: only adds never-reuse-ids strictness
+nothing here needs, at the cost of a bookkeeping table. DELETE by
+(event_name, ts) instead of id - rejected: cannot address one of two
+identical-name events and bakes composite-key coupling into the UI. A
+migration framework (refinery etc.) - rejected: one table, one
+migration; YAGNI, revisit if steps accumulate.
+**Consequences:** Individually deletable events; retries and re-logs
+still dedupe. Costs: each future schema change needs its own hand-rolled
+idempotent step in open_db (noted in SESSION.md), and clients must treat
+ids as opaque handles - the rebuild renumbers them once during the
+migration.

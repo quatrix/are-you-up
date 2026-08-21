@@ -148,8 +148,13 @@
     font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
     color: var(--dim); margin-bottom: 8px;
   }
-  .event { display: flex; gap: 14px; padding: 2px 0; }
+  .event { display: flex; gap: 14px; padding: 2px 0; align-items: baseline; }
   .event .ets { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .event .edel {
+    border: none; background: none; padding: 0 6px; cursor: pointer;
+    color: var(--faint); font: inherit; line-height: 1;
+  }
+  .event .edel:hover { color: var(--now); border: none; }
 
   /* ---- tooltip ------------------------------------------------------- */
   #tip {
@@ -394,7 +399,23 @@ function renderEvents(events) {
     when.textContent = `${fmtDate(new Date(t)).slice(5)} ${hm(t)}`;
     const name = el("span");
     name.textContent = ev.event_name;
-    row.append(when, name);
+    const del = el("button", "edel");
+    del.textContent = "×";
+    del.title = `delete "${ev.event_name}"`;
+    del.addEventListener("click", async () => {
+      const err = $("error");
+      err.style.display = "none";
+      try {
+        const res = await fetch(`/v1/events/${ev.id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`server returned ${res.status}: ${await res.text()}`);
+      } catch (e) {
+        err.textContent = "failed to delete: " + e.message;
+        err.style.display = "block";
+        return;
+      }
+      load(); // re-render from the server's truth
+    });
+    row.append(when, name, del);
     box.appendChild(row);
   }
 }

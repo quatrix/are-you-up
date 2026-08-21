@@ -171,13 +171,24 @@ retries are idempotent.
 ```
 GET /v1/events?from=...&to=...
 -> 200 {"events": [
-     {"event_name": "took pills", "ts": "2026-08-20T09:12:00+03:00"}, ...]}
+     {"id": 1, "event_name": "took pills",
+      "ts": "2026-08-20T09:12:00+03:00"}, ...]}
 ```
 
 `from`/`to` required (RFC 3339), same half-open `from <= ts < to` rule
-as `/v1/intervals`; events come back sorted by instant. The timeline
-page fetches this alongside the intervals and lists the range's events
-below the day rows.
+as `/v1/intervals`; events come back sorted by instant. `id` (added
+2026-08-21) is auto-incremented and is the handle for deletion. The
+timeline page fetches this alongside the intervals and lists the
+range's events below the day rows, each with a delete button.
+
+```
+DELETE /v1/events/{id}
+-> 200 {"deleted": 1}
+```
+
+404 with the uniform error body when no event has that id (the UI acts
+on ids it just listed, so a miss means it was already deleted - worth
+surfacing); 400 on a non-numeric id.
 
 ```
 GET / -> 200 text/html
@@ -216,8 +227,9 @@ GET /healthz -> 200 "ok"
 axum + rusqlite behind a `Mutex<Connection>` (about 3 writes/minute; a pool
 would be decoration). Schema:
 `samples(source TEXT, ts TEXT, idle_s INTEGER, PRIMARY KEY(source, ts))`
-plus `events(event_name TEXT, ts TEXT, PRIMARY KEY(event_name, ts))`,
-WAL mode. Config via env: `ARE_YOU_UP_ADDR` (default `127.0.0.1:8080`;
+plus `events(id INTEGER PRIMARY KEY, event_name TEXT, ts TEXT,
+UNIQUE(event_name, ts))`, WAL mode. Pre-id events tables are rebuilt in
+place by `open_db` on startup (the first real migration, ADR-0012). Config via env: `ARE_YOU_UP_ADDR` (default `127.0.0.1:8080`;
 deployment sets the tailnet address) and `ARE_YOU_UP_DB` (default
 `./are-you-up.db`).
 

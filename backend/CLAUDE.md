@@ -57,5 +57,6 @@ timestamps, 0005 toolchain pin).
   intervals: measured 233ms at 8k actives, sub-ms at day scale
   (LAB_NOTES.md 2026-07-11). Irrelevant until someone consolidates
   year-wide ranges on top of the full scan above.
-- No schema migrations (`CREATE TABLE IF NOT EXISTS` only); see
-  `../SESSION.md`.
+- No general migration mechanism: `CREATE TABLE IF NOT EXISTS` plus
+  ad-hoc, idempotent rebuild steps in `open_db` (precedent: the events
+  id migration, ADR-0012). See `../SESSION.md`.

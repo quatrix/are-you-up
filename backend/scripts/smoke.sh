@@ -45,16 +45,23 @@ assert actual == expected, f"unexpected intervals: {actual}"
 print("smoke OK")
 EOF
 
-# Events: log one, read it back through the range query.
+# Events: log one, read it back through the range query, delete it by id.
 ACK="$(curl -sf -X POST "$BASE/v1/events" -H 'content-type: application/json' -d '{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}')"
-EVENTS="$(curl -sf "$BASE/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00")"
+EVENTS_URL="$BASE/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00"
+EVENTS="$(curl -sf "$EVENTS_URL")"
+DELETED="$(curl -sf -X DELETE "$BASE/v1/events/1")"
+AFTER="$(curl -sf "$EVENTS_URL")"
 
-python3 - "$ACK" "$EVENTS" <<'EOF'
+python3 - "$ACK" "$EVENTS" "$DELETED" "$AFTER" <<'EOF'
 import json, sys
 ack = json.loads(sys.argv[1])
 assert ack == {"accepted": 1, "ts": "2026-07-10T22:05:00+03:00"}, f"unexpected ack: {ack}"
 events = json.loads(sys.argv[2])["events"]
-expected = [{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}]
+expected = [{"id": 1, "event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}]
 assert events == expected, f"unexpected events: {events}"
+deleted = json.loads(sys.argv[3])
+assert deleted == {"deleted": 1}, f"unexpected delete ack: {deleted}"
+after = json.loads(sys.argv[4])["events"]
+assert after == [], f"events survived the delete: {after}"
 print("events smoke OK")
 EOF

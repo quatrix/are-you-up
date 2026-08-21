@@ -7,6 +7,10 @@
   project has shipped a database anyone depends on; would need a real
   migration mechanism (or at least an `ALTER TABLE` step in `open_db`) once
   a deployed `are-you-up.db` needs to survive a schema change.
+  (Partially addressed 2026-08-21: the events-id change shipped the first
+  ad-hoc rebuild migration in `open_db` (ADR-0012). Still no general
+  mechanism - each future schema change needs its own idempotent step,
+  and the `samples` CHECK gap above remains.)
 - Syncer's dumb-retry policy treats every failure (network, non-200, ack
   mismatch) the same: leave the batch unsynced and retry on the next tick.
   A batch the server permanently rejects (e.g. a future 400 for malformed

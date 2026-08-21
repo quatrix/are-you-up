@@ -31,7 +31,7 @@ source of truth for the API contract between the parts.
 
 ## Commands
 
-    make -C backend test        # 50 tests
+    make -C backend test        # 53 tests
     make -C mac test            # 29 tests
     make -C android test        # JVM unit tests, no device needed
     make -C backend smoke       # E2E against a real server process

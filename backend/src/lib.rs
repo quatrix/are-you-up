@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::rejection::QueryRejection;
-use axum::extract::{Extension, Query, State};
+use axum::extract::rejection::{PathRejection, QueryRejection};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use rusqlite::Connection;
@@ -67,17 +67,101 @@ pub fn open_db(path: &str) -> Connection {
         [],
     )
     .expect("create samples table");
+    // `id` is the rowid alias (auto-incrementing); the old composite PK
+    // lives on as UNIQUE so the POST upsert stays idempotent.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS events (
+            id         INTEGER PRIMARY KEY,
             event_name TEXT NOT NULL,
             ts         TEXT NOT NULL,
-            PRIMARY KEY (event_name, ts)
+            UNIQUE (event_name, ts)
         )",
         [],
     )
     .expect("create events table");
+    // One-time in-place migration for databases created before events had an
+    // id (2026-08-20 shape: PRIMARY KEY (event_name, ts), no id column). The
+    // CREATE above is a no-op on such a table, so detect and rebuild; sqlite
+    // cannot add a PK via ALTER TABLE. First real migration in this codebase
+    // (ADR-0012) - the schema had shipped, "recreate the db" stopped being
+    // an option.
+    let has_id = conn
+        .prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = 'id'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .expect("inspect events schema");
+    if !has_id {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE events RENAME TO events_old;
+             CREATE TABLE events (
+                 id         INTEGER PRIMARY KEY,
+                 event_name TEXT NOT NULL,
+                 ts         TEXT NOT NULL,
+                 UNIQUE (event_name, ts)
+             );
+             INSERT INTO events (event_name, ts)
+                 SELECT event_name, ts FROM events_old;
+             DROP TABLE events_old;
+             COMMIT;",
+        )
+        .expect("migrate events table to the id schema");
+        tracing::info!(path, "migrated events table to the id schema");
+    }
     debug!(path, journal_mode = mode, "database open");
     conn
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::open_db;
+
+    /// A database created with the pre-id events shape (PK (event_name, ts),
+    /// no id column) must be rebuilt in place: rows preserved, ids assigned,
+    /// and the (event_name, ts) upsert idempotency still intact.
+    #[test]
+    fn open_db_migrates_pre_id_events_table() {
+        let dir = std::env::temp_dir().join(format!("are-you-up-migration-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("old.db");
+        let path = path.to_str().expect("temp path is valid UTF-8");
+        {
+            let conn = rusqlite::Connection::open(path).expect("open raw db for seeding");
+            conn.execute_batch(
+                "CREATE TABLE events (
+                     event_name TEXT NOT NULL,
+                     ts         TEXT NOT NULL,
+                     PRIMARY KEY (event_name, ts)
+                 );
+                 INSERT INTO events (event_name, ts)
+                     VALUES ('took pills', '2026-08-20T09:05:00+03:00');",
+            )
+            .expect("seed old-shape db");
+        }
+
+        let conn = open_db(path);
+        let (id, name): (i64, String) = conn
+            .query_row("SELECT id, event_name FROM events", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("migrated row is readable with an id");
+        assert_eq!((id, name.as_str()), (1, "took pills"));
+
+        conn.execute(
+            "INSERT INTO events (event_name, ts)
+                 VALUES ('took pills', '2026-08-20T09:05:00+03:00')
+             ON CONFLICT (event_name, ts) DO NOTHING",
+            [],
+        )
+        .expect("upsert against the migrated table");
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 1, "upsert idempotency survives the migration");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +179,7 @@ pub fn app(conn: Connection) -> Router {
         .route("/v1/samples", post(post_samples))
         .route("/v1/intervals", get(get_intervals))
         .route("/v1/events", post(post_event).get(get_events))
+        .route("/v1/events/{id}", delete(delete_event))
         .route("/openapi.json", get(openapi_json))
         .route("/docs", get(docs))
         .route("/docs/rapidoc-min.js", get(rapidoc_js))
@@ -126,7 +211,7 @@ async fn timeline() -> axum::response::Html<&'static str> {
                        device's local UTC offset (ADR-0004); percent-encode '+' \
                        as %2B in query parameters."
     ),
-    paths(post_samples, get_intervals, post_event, get_events)
+    paths(post_samples, get_intervals, post_event, get_events, delete_event)
 )]
 struct ApiDoc;
 
@@ -387,10 +472,55 @@ struct EventsQuery {
 
 #[derive(Serialize, ToSchema)]
 struct EventOut {
+    /// Auto-incremented; the handle for DELETE /v1/events/{id}.
+    #[schema(example = 1)]
+    id: i64,
     #[schema(example = "took pills")]
     event_name: String,
     #[schema(example = "2026-08-20T09:12:00+03:00")]
     ts: String,
+}
+
+#[derive(Serialize, ToSchema)]
+struct DeleteAck {
+    deleted: usize,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/events/{id}",
+    params(("id" = i64, Path, description = "Event id, as returned by GET /v1/events")),
+    responses(
+        (status = 200, description = "Event deleted", body = DeleteAck),
+        (status = 400, description = "Non-numeric id", body = ApiError),
+        (status = 404, description = "No event with that id", body = ApiError),
+    )
+)]
+async fn delete_event(
+    State(state): State<AppState>,
+    id: Result<Path<i64>, PathRejection>,
+) -> Response {
+    // Result-parsed like the query extractors: a non-numeric id gets our
+    // uniform JSON 400, not axum's plain-text rejection.
+    let Path(id) = match id {
+        Ok(id) => id,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("invalid id: {e}")),
+    };
+    let conn = state
+        .db
+        .lock()
+        .expect("db mutex is never poisoned: no handler panics while holding it");
+    match conn.execute("DELETE FROM events WHERE id = ?1", [id]) {
+        // Deleting a missing id is a 404, not a silent no-op: the UI acts on
+        // ids it just listed, so a miss means someone else already deleted
+        // it - worth surfacing rather than swallowing.
+        Ok(0) => error_response(StatusCode::NOT_FOUND, format!("no event with id {id}")),
+        Ok(_) => {
+            debug!(id, "deleted event");
+            Json(DeleteAck { deleted: 1 }).into_response()
+        }
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -429,17 +559,17 @@ async fn get_events(
     // Same full-scan-then-parse discipline as /v1/intervals: TEXT
     // range-filtering mixed-offset RFC 3339 is unsound (see the ts invariant
     // in CLAUDE.md), and this table is a handful of rows per day.
-    let rows: Vec<(String, String)> = {
+    let rows: Vec<(i64, String, String)> = {
         let conn = state
             .db
             .lock()
             .expect("db mutex is never poisoned: no handler panics while holding it");
-        let mut stmt = match conn.prepare("SELECT event_name, ts FROM events") {
+        let mut stmt = match conn.prepare("SELECT id, event_name, ts FROM events") {
             Ok(stmt) => stmt,
             Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("db: {e}")),
         };
         let result = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .and_then(|mapped| mapped.collect());
         match result {
             Ok(rows) => rows,
@@ -448,16 +578,16 @@ async fn get_events(
     };
 
     let mut skipped_unparseable_ts = 0u32;
-    let mut events: Vec<(DateTime<FixedOffset>, String, String)> = rows
+    let mut events: Vec<(DateTime<FixedOffset>, i64, String, String)> = rows
         .into_iter()
-        .filter_map(|(event_name, ts)| {
+        .filter_map(|(id, event_name, ts)| {
             // Insert-time validation makes a bad row out-of-band edits, not a
             // client mistake: skip it loudly rather than 500 the request.
             let Ok(t) = DateTime::parse_from_rfc3339(&ts) else {
                 skipped_unparseable_ts += 1;
                 return None;
             };
-            (t >= from && t < to).then_some((t, event_name, ts))
+            (t >= from && t < to).then_some((t, id, event_name, ts))
         })
         .collect();
     if skipped_unparseable_ts > 0 {
@@ -468,11 +598,11 @@ async fn get_events(
     }
     // Instant first (TEXT order lies across offsets), name as a tiebreak so
     // simultaneous events come back in a deterministic order.
-    events.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    events.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
 
     let events: Vec<EventOut> = events
         .into_iter()
-        .map(|(_, event_name, ts)| EventOut { event_name, ts })
+        .map(|(_, id, event_name, ts)| EventOut { id, event_name, ts })
         .collect();
     debug!(from = %from, to = %to, events = events.len(), "listed events");
     Json(EventsResponse { events }).into_response()

@@ -474,7 +474,7 @@ async fn post_event_stores_and_get_returns_it() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["events"],
-        json!([{"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}])
+        json!([{"id": 1, "event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"}])
     );
 }
 
@@ -505,7 +505,7 @@ async fn post_event_without_ts_stamps_server_time() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         listed["events"],
-        json!([{"event_name": "took pills", "ts": body["ts"]}])
+        json!([{"id": 1, "event_name": "took pills", "ts": body["ts"]}])
     );
 }
 
@@ -574,13 +574,52 @@ async fn events_range_is_half_open_and_sorted_by_instant() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    // ids follow insertion order (lunch=1, took pills=2), not sort order.
     assert_eq!(
         body["events"],
         json!([
-            {"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"},
-            {"event_name": "lunch", "ts": "2026-07-10T22:30:00+03:00"},
+            {"id": 2, "event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"},
+            {"id": 1, "event_name": "lunch", "ts": "2026-07-10T22:30:00+03:00"},
         ])
     );
+}
+
+#[tokio::test]
+async fn delete_event_removes_it_and_a_second_delete_404s() {
+    let app = test_app();
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/v1/events",
+        Some(json!({"event_name": "took pills", "ts": "2026-07-10T22:05:00+03:00"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(&app, "DELETE", "/v1/events/1", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["deleted"], 1);
+
+    let (_, listed) = send(
+        &app,
+        "GET",
+        "/v1/events?from=2026-07-10T22:00:00%2B03:00&to=2026-07-10T23:00:00%2B03:00",
+        None,
+    )
+    .await;
+    assert_eq!(listed["events"], json!([]));
+
+    let (status, body) = send(&app, "DELETE", "/v1/events/1", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["error"].is_string(), "body: {body}");
+}
+
+#[tokio::test]
+async fn delete_event_rejects_a_non_numeric_id() {
+    let app = test_app();
+    let (status, body) = send(&app, "DELETE", "/v1/events/banana", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].is_string(), "body: {body}");
 }
 
 #[tokio::test]
